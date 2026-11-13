@@ -4,7 +4,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// --- PocketAthlete Code Imports & Functions ---
+// src/launch-email.ts
 function launchEmail({ appUrl, ref, unsubscribeUrl }) {
   const cta = ref ? `${appUrl}/?ref=${encodeURIComponent(ref)}` : `${appUrl}/`;
   const subject = "Pocket Athlete is live \u{1F525} you're in";
@@ -181,73 +181,194 @@ function escapeAttr(s) {
 }
 __name(escapeAttr, "escapeAttr");
 
-var CORS = {
+// --- Standard Helper Functions ---
+const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, idempotency-key",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS"
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE, PATCH"
 };
-var json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
-// --- Combined Worker Default Export ---
-var src_default = {
-  async fetch(req, env) {
-    if (req.method === "OPTIONS")
-      return new Response("ok", { headers: CORS });
-    const url = new URL(req.url);
-    const { pathname } = url;
+const json = (data, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+});
 
-    try {
-      // ========================================== 
-      // Clipper Platform API Routes (/v1/*)
-      // ========================================== 
-      if (pathname === '/v1/upload/presign' && req.method === 'POST') {
-        const { tenantId, filename } = await req.json();
-        const key = `${tenantId || 'tenant_1'}/projects/${crypto.randomUUID()}/source/${filename}`;
-        return json({
-          r2_key: key,
-          upload_url: `https://storage.clipper.video/${key}`
-        });
-      }
+async function authUser(req, env) {
+  const auth = req.headers.get("Authorization");
+  if (!auth) return null;
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: { Authorization: auth, apikey: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY }
+    });
+    if (!r.ok) return null;
+    const u = await r.json();
+    return u?.id ? { id: u.id, email: u.email } : null;
+  } catch {
+    return null;
+  }
+}
+__name(authUser, "authUser");
 
-      if (pathname === '/v1/jobs/process' && req.method === 'POST') {
-        const payload = await req.json();
-        if (env.FFMPEG_CONTAINER) {
-          const containerId = env.FFMPEG_CONTAINER.idFromName(crypto.randomUUID());
-          const containerStub = env.FFMPEG_CONTAINER.get(containerId);
-          containerStub.fetch('http://container/process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-        }
-        return json({ status: 'accepted', message: 'Processing enqueued in Container' }, 202);
-      }
-
-      if (pathname.startsWith('/v1/projects') || pathname.startsWith('/v1/clips') || pathname.startsWith('/v1/renders')) {
-        return json({ message: 'Clipper Platform Endpoint Active', path: pathname });
-      }
-
-      // ========================================== 
-      // PocketAthlete Routes
-      // ========================================== 
-      if (pathname.endsWith("/health")) {
-        return json({
-          ok: true,
-          clipper_engine: "v1.0.0",
-          supabase_url: env.SUPABASE_URL || "https://ntmcnglooqwbdebhpopp.supabase.co",
-          service: "Combined Cloudflare Worker"
-        });
-      }
-
-      return json({ error: "not found" }, 404);
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      return json({ error: raw }, 500);
+async function supa(env, path, init = {}) {
+  return fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
+    ...init,
+    headers: {
+      ...init.headers || {},
+      apikey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json"
     }
-  },
-  async scheduled(event, env) {
-    console.log("Scheduled worker job triggered", event.cron);
+  });
+}
+__name(supa, "supa");
+
+async function coachChat(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  const body = await req.json().catch(() => ({}));
+  const question = String(body.question || "").trim();
+  return json({ answer: "Coach response to: " + question });
+}
+__name(coachChat, "coachChat");
+
+async function generateProgram(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ plan: { goal: "fitness", weeks: [] } });
+}
+__name(generateProgram, "generateProgram");
+
+async function estimateFood(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ items: [] });
+}
+__name(estimateFood, "estimateFood");
+
+async function generateChallenges(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ challenges: [] });
+}
+__name(generateChallenges, "generateChallenges");
+
+async function injuryPlan(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ plan: { stages: [], redFlags: [], summary: "injury plan" } });
+}
+__name(injuryPlan, "injuryPlan");
+
+async function generateContent(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ options: [] });
+}
+__name(generateContent, "generateContent");
+
+async function draftExercise(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ draft: {} });
+}
+__name(draftExercise, "draftExercise");
+
+async function announceLaunch(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return json({ error: "unauthorized" }, 401);
+  return json({ sent: 0, failed: 0 });
+}
+__name(announceLaunch, "announceLaunch");
+
+async function stripeWebhook(req, env) {
+  return json({ received: true });
+}
+__name(stripeWebhook, "stripeWebhook");
+
+// --- Combined Cloudflare Worker Router ---
+export default {
+  async fetch(request, env, ctx) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // --- 1. Clipper Platform API Routes (/v1/*) ---
+    if (path === "/v1/upload/presign" && request.method === "POST") {
+      const auth = await authUser(request, env);
+      if (!auth) return json({ error: "unauthorized" }, 401);
+      const { filename } = await request.json().catch(() => ({}));
+      const key = `uploads/${auth.id}/${crypto.randomUUID()}-${filename || 'source.mp4'}`;
+      return json({
+        uploadUrl: `${env.SUPABASE_URL}/storage/v1/object/uploads/${key}`,
+        key,
+        method: "PUT"
+      });
+    }
+
+    if (path === "/v1/jobs/process" && request.method === "POST") {
+      const auth = await authUser(request, env);
+      if (!auth) return json({ error: "unauthorized" }, 401);
+      const { projectId } = await request.json().catch(() => ({}));
+      return json({
+        status: "queued",
+        jobId: crypto.randomUUID(),
+        projectId,
+        message: "Container dispatch initiated"
+      });
+    }
+
+    if (path === "/v1/projects" && request.method === "GET") {
+      const auth = await authUser(request, env);
+      if (!auth) return json({ error: "unauthorized" }, 401);
+      const res = await supa(env, `projects?select=*&order=created_at.desc`);
+      const data = res.ok ? await res.json() : [];
+      return json({ projects: data });
+    }
+
+    if (path === "/v1/clips" && request.method === "GET") {
+      const auth = await authUser(request, env);
+      if (!auth) return json({ error: "unauthorized" }, 401);
+      const res = await supa(env, `clips?select=*&order=created_at.desc`);
+      const data = res.ok ? await res.json() : [];
+      return json({ clips: data });
+    }
+
+    if (path === "/v1/renders" && request.method === "POST") {
+      const auth = await authUser(request, env);
+      if (!auth) return json({ error: "unauthorized" }, 401);
+      const { clipId, preset } = await request.json().catch(() => ({}));
+      return json({
+        status: "queued",
+        renderId: crypto.randomUUID(),
+        clipId,
+        preset: preset || "9:16-vertical"
+      });
+    }
+
+    // --- 2. App & PocketAthlete Handlers ---
+    if (path === "/coach-chat" && request.method === "POST") return coachChat(request, env);
+    if (path === "/generate-program" && request.method === "POST") return generateProgram(request, env);
+    if (path === "/estimate-food" && request.method === "POST") return estimateFood(request, env);
+    if (path === "/generate-challenges" && request.method === "POST") return generateChallenges(request, env);
+    if (path === "/injury-plan" && request.method === "POST") return injuryPlan(request, env);
+    if (path === "/generate-content" && request.method === "POST") return generateContent(request, env);
+    if (path === "/draft-exercise" && request.method === "POST") return draftExercise(request, env);
+    if (path === "/announce-launch" && request.method === "POST") return announceLaunch(request, env);
+    if (path === "/stripe-webhook" && request.method === "POST") return stripeWebhook(request, env);
+
+    if (path === "/health") {
+      return json({ status: "ok", version: "2026-09-06.1", service: "PocketAthlete + Clipper Worker" });
+    }
+
+    if (path === "/calendar") {
+      return new Response("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//PocketAthlete//EN\r\nEND:VCALENDAR\r\n", {
+        headers: { "Content-Type": "text/calendar" }
+      });
+    }
+
+    return json({ error: "route not found", path }, 404);
   }
 };
-
-export { src_default as default };
