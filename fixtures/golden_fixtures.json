@@ -1,0 +1,16 @@
+[
+  {
+    "id": "fix_01",
+    "name": "1-speaker clean podcast",
+    "duration_s": 300,
+    "expected_candidates": 3,
+    "assert_no_mid_word_cuts": true
+  },
+  {
+    "id": "fix_02",
+    "name": "2-speaker crosstalk conversation",
+    "duration_s": 600,
+    "expected_candidates": 5,
+    "assert_no_mid_word_cuts": true
+  }
+]
