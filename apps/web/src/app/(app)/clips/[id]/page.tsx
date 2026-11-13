@@ -1,34 +1,54 @@
 import React from 'react'
-import { Button } from '@/components/ui/button'
-import { TranscriptEditor } from '@/components/editor/transcript-editor'
+import Link from 'next/link'
 
-export default async function ClipEditorPage({ params }: { params: Promise<{ id: string }> }) {
+export function generateStaticParams() {
+  return [{ id: 'cand_1' }, { id: 'cand_2' }]
+}
+
+export const dynamicParams = false;
+
+export default async function ClipDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const mockWords = [
-    { w: 'Welcome', t0: 1000, t1: 1400 },
-    { w: 'to', t0: 1420, t1: 1550 },
-    { w: 'the', t0: 1560, t1: 1700 },
-    { w: 'Clipper', t0: 1710, t1: 2200 },
-    { w: 'podcast.', t0: 2210, t1: 2800 },
-  ]
-
   return (
-    <div className="max-w-6xl mx-auto px-6 py-10 grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col items-center justify-center min-h-[500px]">
-        <div className="aspect-[9/16] w-full bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 mb-4">
-          <span className="text-slate-500 text-sm">9:16 Video Player ({id})</span>
+    <div className="max-w-6xl mx-auto px-6 py-10 text-slate-100">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <Link href="/projects" className="text-xs text-indigo-400 hover:underline mb-1 inline-block">
+            &larr; Back to Projects
+          </Link>
+          <h1 className="text-2xl font-bold">Editing Clip #{id}</h1>
         </div>
-        <div className="w-full flex space-x-2">
-          <Button variant="primary" className="w-full">Render & Export MP4</Button>
-        </div>
+        <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-semibold transition-colors">
+          Export Clip MP4
+        </button>
       </div>
 
-      <div className="lg:col-span-2 space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white mb-1">Clip Review & Editor</h2>
-          <p className="text-xs text-slate-400">Adjust trim handles, captions, and brand templates</p>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col items-center justify-center min-h-[400px]">
+          <div className="w-48 aspect-[9/16] bg-slate-950 rounded-lg border border-slate-800 flex items-center justify-center text-slate-500 font-mono text-xs text-center p-4">
+            9:16 Video Player & Caption Overlay Preview
+          </div>
         </div>
-        <TranscriptEditor words={mockWords} />
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+          <h2 className="text-lg font-bold border-b border-slate-800 pb-2">Clip Controls</h2>
+          <div>
+            <label className="text-xs text-slate-400 font-semibold block mb-1">Aspect Ratio</label>
+            <select className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-sm text-slate-200">
+              <option>9:16 Vertical (TikTok/Reels/Shorts)</option>
+              <option>1:1 Square (Instagram)</option>
+              <option>16:9 Landscape</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 font-semibold block mb-1">Caption Karaoke Style</label>
+            <select className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-sm text-slate-200">
+              <option>Yellow Word Highlight</option>
+              <option>White Bold Bottom</option>
+              <option>Boxed Background</option>
+            </select>
+          </div>
+        </div>
       </div>
     </div>
   )

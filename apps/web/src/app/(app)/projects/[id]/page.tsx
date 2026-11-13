@@ -3,6 +3,12 @@ import Link from 'next/link'
 import { StageRail } from '@/components/stage-rail'
 import { ClipCard } from '@/components/clip-card'
 
+export function generateStaticParams() {
+  return [{ id: 'demo-project-1' }]
+}
+
+export const dynamicParams = false;
+
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const mockCandidates = [
