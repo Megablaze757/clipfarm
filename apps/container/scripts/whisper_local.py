@@ -12,8 +12,8 @@ Groq's verbose_json, so the pipeline treats both the same:
 
     python3 whisper_local.py <audio-file> [language|auto]
 
-Model: WHISPER_MODEL env var (default "base" — about 5-10x faster than real
-time on a 4-core GitHub runner; "small" is more accurate and ~3x slower).
+Model: WHISPER_MODEL env var (default "small" — measured 7.7x real time on a 4-core
+GitHub runner, ~8 min per hour of audio; "base" is ~2.5x faster but garbles more).
 """
 import json
 import os
@@ -45,7 +45,7 @@ def main() -> None:
         sys.exit(2)
     audio = sys.argv[1]
     language = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] not in ("", "auto") else None
-    model_name = os.environ.get("WHISPER_MODEL", "base")
+    model_name = os.environ.get("WHISPER_MODEL", "small")
     threads = int(os.environ.get("WHISPER_THREADS", str(os.cpu_count() or 4)))
 
     model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=threads)

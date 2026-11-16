@@ -95,7 +95,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: whisper-base-v1
+          key: whisper-small-v1
 
       # Installed packages are cached by lockfile, so most jobs skip `npm ci`.
       - name: Cache node_modules
@@ -126,5 +126,7 @@ jobs:
       - name: Run
         env:
           WHISPER_PYTHON: ${{ steps.py.outputs.python-path }}
-          WHISPER_MODEL: base
+          # "small": noticeably more accurate than "base" (measured 7.7x real time on
+          # a runner, ~8 min per hour of audio, vs 19x / ~3 min for base).
+          WHISPER_MODEL: small
         run: node apps/container/dist/cli.js "$JOB_KIND" "$JOB_ID"

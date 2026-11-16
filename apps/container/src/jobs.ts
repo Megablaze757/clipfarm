@@ -207,7 +207,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
       // review_proxy_key = the media the editor and shortlist play.
       progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: mediaKey,
       candidate_count: rows.length, top_score: picked[0]?.score ?? null,
-      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "base"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
+      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
     });
     stage("ready");
     // If a working copy replaced the upload, the original isn't needed: delete
