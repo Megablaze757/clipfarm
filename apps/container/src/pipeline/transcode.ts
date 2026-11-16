@@ -7,9 +7,32 @@ import { FRAME_MS, type Envelope } from "../lib/types";
  * Audio-only sources get a waveform video so every later stage can treat
  * everything as video.
  */
-export async function makeMezzanine(src: string, out: string, info: Probe): Promise<void> {
-  const enc = ["-c:v", "libx264", "-profile:v", "high", "-crf", "20", "-preset", "medium", "-g", "60", "-keyint_min", "60",
-    "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+/**
+ * Already H.264 + AAC, ≤1080p, 8-bit 4:2:0, no rotation? Then re-encoding buys
+ * nothing — copy the streams into a fast-start MP4 in seconds instead of
+ * spending up to real-time re-encoding (YouTube downloads usually qualify,
+ * because ingest asks yt-dlp for H.264 first). Renders still cut accurately:
+ * they re-encode from an input seek, which doesn't need a fixed GOP.
+ */
+export function canStreamCopy(info: Probe): boolean {
+  return info.hasVideo && info.vcodec === "h264" && info.acodec === "aac" &&
+    info.height <= 1080 && info.width <= 1920 && info.rotation === 0 &&
+    (info.pixFmt === "yuv420p" || info.pixFmt === "yuvj420p");
+}
+
+export async function makeMezzanine(src: string, out: string, info: Probe): Promise<"copied" | "encoded"> {
+  if (canStreamCopy(info)) {
+    try {
+      await ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-movflags", "+faststart", out]);
+      return "copied";
+    } catch (e) {
+      console.warn(`stream copy failed, re-encoding: ${(e as Error).message.slice(0, 200)}`);
+    }
+  }
+  // "veryfast" is ~4-6x quicker than "medium" for ~10-15 % more bytes at the
+  // same CRF — the right trade for a working copy that's deleted within a week.
+  const enc = ["-c:v", "libx264", "-profile:v", "high", "-crf", "21", "-preset", "veryfast", "-g", "60", "-keyint_min", "60",
+    "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
     "-movflags", "+faststart"];
   if (info.hasVideo) {
     await ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?",
@@ -20,6 +43,7 @@ export async function makeMezzanine(src: string, out: string, info: Probe): Prom
       "-filter_complex", "[0:a]showwaves=s=1280x260:mode=cline:colors=0x818cf8:rate=30[w];[1:v][w]overlay=0:230:shortest=1[v]",
       "-map", "[v]", "-map", "0:a:0", ...enc, out]);
   }
+  return "encoded";
 }
 
 /** FR-2.2: 16 kHz mono PCM for ASR. */
@@ -84,6 +108,6 @@ export async function poster(src: string, atMs: number, outJpg: string, outWebp?
 
 /** Whole-source low-res proxy the editor seeks around in (and MediaPipe reads). */
 export async function reviewProxy(mezzanine: string, out: string): Promise<void> {
-  await ffmpeg(["-i", mezzanine, "-vf", "scale=-2:360", "-c:v", "libx264", "-crf", "30", "-preset", "veryfast", "-g", "60",
+  await ffmpeg(["-i", mezzanine, "-vf", "scale=-2:360", "-c:v", "libx264", "-crf", "30", "-preset", "ultrafast", "-g", "60",
     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-movflags", "+faststart", out]);
 }

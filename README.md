@@ -35,6 +35,13 @@ to a single speaker. Speaker framing uses **MediaPipe face detection in the
 browser** (no GPU server), falling back to a static lock, then a centre crop, then a
 blurred-letterbox "fit".
 
+**Long videos, still free.** Jobs run on GitHub Actions (free for this public repo, up
+to 6 h each). If Groq's free speech-to-text limit is hit, the runner switches to
+built-in Whisper on its own CPU (faster-whisper, installed only when needed), or waits
+for the allowance when there's no fallback. H.264/AAC sources are stream-copied instead
+of re-encoded, the downloaded source is deleted from disk as soon as the working copy
+exists, and jobs use the runner's largest disk.
+
 ## Getting it running
 
 Clipper reuses everything apex-api already has — PocketAthlete's Supabase project

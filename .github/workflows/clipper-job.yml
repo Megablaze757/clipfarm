@@ -55,25 +55,67 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Install FFmpeg, fonts, yt-dlp
+      # Prebuilt static FFmpeg (libx264, libass, freetype), cached between runs —
+      # apt-get update + install cost 30-60 s on every job. Re-downloaded weekly.
+      - name: Week number (tool cache key)
+        id: week
+        run: echo "n=$(date +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Cache tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: ~/clipper-tools
+          key: clipper-tools-${{ steps.week.outputs.n }}
+      - name: Download FFmpeg + yt-dlp
+        if: steps.tools.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null
-          sudo curl -sSfL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod +x /usr/local/bin/yt-dlp
-          ffmpeg -hide_banner -version | head -1
+          mkdir -p ~/clipper-tools && cd ~/clipper-tools
+          curl -sSfL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | tar -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+          curl -sSfL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x ffmpeg ffprobe yt-dlp
+      - name: Put tools on PATH
+        run: |
+          echo "$HOME/clipper-tools" >> "$GITHUB_PATH"
+          "$HOME/clipper-tools/ffmpeg" -hide_banner -version | head -1
+          # Caption font: usually preinstalled; install only if missing.
+          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || { sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core > /dev/null; }
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
+      # Python for the built-in Whisper fallback. faster-whisper itself installs
+      # only if Groq rate-limits this job, so normal jobs don't pay for it.
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: "3.12"
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-base-v1
+
       - name: Build the pipeline
         run: |
           npm ci --workspace=apps/container --no-audit --no-fund
           npm run build --workspace=apps/container
 
+      # Long sources need room: source + working copy + audio can pass 10 GB.
+      # Use whichever of /mnt (the runner's extra disk) or the temp dir has more.
+      - name: Pick the roomiest disk
+        run: |
+          best="$RUNNER_TEMP"; bestfree=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2{print $4}')
+          if [ -d /mnt ] && sudo mkdir -p /mnt/clipper && sudo chown "$USER" /mnt/clipper; then
+            mntfree=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            [ "$mntfree" -gt "$bestfree" ] && best=/mnt && bestfree=$mntfree
+          fi
+          echo "WORK_DIR=$best/clipper" >> "$GITHUB_ENV"
+          echo "Working in $best/clipper ($((bestfree / 1024 / 1024)) GB free)"
+
       - name: Run
         env:
-          WORK_DIR: ${{ runner.temp }}/clipper
+          WHISPER_PYTHON: ${{ steps.py.outputs.python-path }}
+          WHISPER_MODEL: base
         run: node apps/container/dist/cli.js "$JOB_KIND" "$JOB_ID"

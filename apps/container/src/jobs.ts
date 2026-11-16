@@ -5,7 +5,7 @@ import { db as supabase, notifyNext, r2Delete, r2Download, r2Upload } from "./li
 import type { Candidate } from "./lib/types";
 import { fetchSource } from "./pipeline/ingest";
 import { analyzeLoudness, energyEnvelope, extractAudio, makeMezzanine, poster, reviewProxy } from "./pipeline/transcode";
-import { transcribe } from "./pipeline/asr";
+import { localChunksUsed, transcribe } from "./pipeline/asr";
 import { sentences } from "./pipeline/text";
 import { generateWindows, targetCount } from "./pipeline/candidates";
 import { heuristicScore, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
@@ -67,8 +67,11 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const audio = join(dir, "audio.wav");
     await extractAudio(src.path, audio);
     const mezz = join(dir, "mezzanine.mp4");
-    const mezzReady = makeMezzanine(src.path, mezz, info).then(async () => {
-      stage("mezzanine");
+    const mezzReady = makeMezzanine(src.path, mezz, info).then(async (mode) => {
+      stage(`mezzanine (${mode})`);
+      // The source has served its purpose (audio + mezzanine both made): free
+      // the disk now, so a 4-hour job never holds two full-size copies.
+      await rm(src.path, { force: true }).catch(() => {});
       await r2Upload(`${prefix}/mezzanine/mezzanine.mp4`, mezz, "video/mp4");
       await supabase.from("artifacts").upsert({ project_id: projectId, stage: "mezzanine", uri: `${prefix}/mezzanine/mezzanine.mp4`, meta: { width: info.width, height: info.height } }, { onConflict: "project_id,stage" });
     });
@@ -112,24 +115,33 @@ export async function processProject(job: ProcessJob): Promise<void> {
     await setStatus(projectId, "scoring", { progress: 75 });
     await mezzReady;
     stage("proxies");
-    const rows: Record<string, unknown>[] = [];
-    for (let i = 0; i < picked.length; i++) {
-      const c: Candidate = picked[i];
-      const proxyPath = join(dir, `proxy_${i}.mp4`);
-      const thumbPath = join(dir, `thumb_${i}.jpg`);
-      await renderProxy(mezz, c.t_in_ms, c.t_out_ms, proxyPath);
-      await poster(mezz, c.t_in_ms + 1000, thumbPath);
-      const proxyKey = `${prefix}/proxies/${i}_${c.t_in_ms}.mp4`;
-      const thumbKey = `${prefix}/thumbs/cand_${i}.jpg`;
-      await r2Upload(proxyKey, proxyPath, "video/mp4");
-      await r2Upload(thumbKey, thumbPath, "image/jpeg");
-      rows.push({
-        project_id: projectId, t_in_ms: c.t_in_ms, t_out_ms: c.t_out_ms, score: c.score,
-        subscores: c.subscores, features: { ...c.features, thumb_key: thumbKey },
-        rationale: c.rationale, proxy_uri: proxyKey, scorer_version: `${SCORER_VERSION}${c.features.model ? `+${c.features.model}` : ""}`,
-      });
-      await setStatus(projectId, "scoring", { progress: 75 + Math.round((20 * (i + 1)) / picked.length) });
-    }
+    // Three at a time: each short clip encode is single-threaded-ish, and the
+    // runner has 4 cores. Order of `rows` stays the score order.
+    const rows: Record<string, unknown>[] = new Array(picked.length);
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+      while (next < picked.length) {
+        const i = next++;
+        const c: Candidate = picked[i];
+        const proxyPath = join(dir, `proxy_${i}.mp4`);
+        const thumbPath = join(dir, `thumb_${i}.jpg`);
+        await renderProxy(mezz, c.t_in_ms, c.t_out_ms, proxyPath);
+        await poster(mezz, c.t_in_ms + 1000, thumbPath);
+        const proxyKey = `${prefix}/proxies/${i}_${c.t_in_ms}.mp4`;
+        const thumbKey = `${prefix}/thumbs/cand_${i}.jpg`;
+        await r2Upload(proxyKey, proxyPath, "video/mp4");
+        await r2Upload(thumbKey, thumbPath, "image/jpeg");
+        rows[i] = {
+          project_id: projectId, t_in_ms: c.t_in_ms, t_out_ms: c.t_out_ms, score: c.score,
+          subscores: c.subscores, features: { ...c.features, thumb_key: thumbKey },
+          rationale: c.rationale, proxy_uri: proxyKey, scorer_version: `${SCORER_VERSION}${c.features.model ? `+${c.features.model}` : ""}`,
+        };
+        done++;
+        await setStatus(projectId, "scoring", { progress: 75 + Math.round((20 * done) / picked.length) });
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
     // A retried project replaces its previous candidates.
     await supabase.from("candidates").delete().eq("project_id", projectId);
     const { error: insErr } = await supabase.from("candidates").insert(rows);
@@ -153,7 +165,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
     await setStatus(projectId, "ready", {
       progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: `${prefix}/proxies/review.mp4`,
       candidate_count: rows.length, top_score: picked[0]?.score ?? null,
-      model_versions: { asr: "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
+      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "base"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
     });
     stage("ready");
     // The upload has done its job (the mezzanine replaces it): delete it now

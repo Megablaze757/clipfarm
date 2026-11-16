@@ -116,3 +116,15 @@ test("punctuation from segment text is copied onto words", () => {
     [{ id: 0, start: 0, end: 0.6, text: " Hello, world." }, { id: 1, start: 1, end: 1.5, text: " How are you?" }]);
   assert.deepEqual(out, ["Hello,", "world.", "How", "are", "you?"]);
 });
+
+test("working copy is a stream copy only for safe H.264/AAC sources", () => {
+  const { canStreamCopy } = require("../dist/pipeline/transcode");
+  const base = { durationMs: 1, hasVideo: true, hasAudio: true, width: 1920, height: 1080, fps: 30, rotation: 0, vcodec: "h264", acodec: "aac", pixFmt: "yuv420p" };
+  assert.equal(canStreamCopy(base), true);
+  assert.equal(canStreamCopy({ ...base, vcodec: "vp9" }), false);
+  assert.equal(canStreamCopy({ ...base, acodec: "opus" }), false);
+  assert.equal(canStreamCopy({ ...base, height: 2160, width: 3840 }), false);
+  assert.equal(canStreamCopy({ ...base, rotation: 90 }), false);
+  assert.equal(canStreamCopy({ ...base, pixFmt: "yuv420p10le" }), false);
+  assert.equal(canStreamCopy({ ...base, hasVideo: false }), false);
+});

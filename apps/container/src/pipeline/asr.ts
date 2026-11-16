@@ -1,6 +1,6 @@
 import { openAsBlob } from "node:fs";
 import { join } from "node:path";
-import { ffmpeg, StageError } from "../lib/proc";
+import { ffmpeg, run, StageError } from "../lib/proc";
 import { llm, parseJsonObject, transcribeViaWorker } from "../lib/worker";
 import type { Segment, Transcript, Word } from "../lib/types";
 
@@ -17,26 +17,89 @@ interface GroqWord { word: string; start: number; end: number }
 interface GroqSegment { id: number; start: number; end: number; text: string; avg_logprob?: number; no_speech_prob?: number }
 interface GroqResponse { text: string; language?: string; words?: GroqWord[]; segments?: GroqSegment[] }
 
+/**
+ * Built-in Whisper on the runner's own CPU (scripts/whisper_local.py, via
+ * faster-whisper). Free and unlimited, slower than Groq. Available when the
+ * runner set WHISPER_PYTHON (the GitHub workflow installs it); the Cloudflare
+ * Container doesn't have it and simply waits for Groq instead.
+ */
+const WHISPER_PYTHON = () => process.env.WHISPER_PYTHON || "";
+const localAvailable = () => !!WHISPER_PYTHON();
+let usedLocal = 0;
+export const localChunksUsed = () => usedLocal;
+
+/**
+ * Installs faster-whisper the first time it's needed, so jobs that never hit
+ * Groq's limit don't pay the ~30 s install. Model weights download on first
+ * use too (~150 MB for "base").
+ */
+let installed: Promise<void> | null = null;
+function ensureLocalWhisper(): Promise<void> {
+  installed ??= (async () => {
+    try {
+      await run(WHISPER_PYTHON(), ["-c", "import faster_whisper"], { timeoutMs: 60_000 });
+    } catch {
+      console.log("installing faster-whisper for the built-in transcription fallback…");
+      await run(WHISPER_PYTHON(), ["-m", "pip", "install", "--quiet", "faster-whisper>=1.1,<2"], { timeoutMs: 10 * 60 * 1000 });
+    }
+  })();
+  return installed;
+}
+
+async function transcribeLocally(path: string, language: string | null): Promise<GroqResponse> {
+  await ensureLocalWhisper();
+  const script = join(__dirname, "..", "..", "scripts", "whisper_local.py");
+  const { stdout } = await run(WHISPER_PYTHON(), [script, path, language ?? "auto"], { timeoutMs: 90 * 60 * 1000 });
+  usedLocal++;
+  const parsed = JSON.parse(stdout) as GroqResponse;
+  return { ...parsed, text: (parsed.segments ?? []).map((s) => s.text).join(" ") };
+}
+
+/** Longest we'll sit waiting on Groq's hourly allowance when there's no local fallback. */
+const MAX_GROQ_WAIT_MS = 65 * 60 * 1000;
+/** A Retry-After longer than this switches straight to local Whisper (when available). */
+const SWITCH_TO_LOCAL_AFTER_MS = 30 * 1000;
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
 async function transcribeChunk(path: string, language: string | null): Promise<GroqResponse> {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  let waited = 0;
+  for (let attempt = 0; ; attempt++) {
     const r = await transcribeViaWorker(await openAsBlob(path), language)
       .catch((e) => ({ ok: false, status: 0, headers: new Headers(), text: async () => String(e) }) as unknown as Response);
     if (r.ok) return (await r.json()) as GroqResponse;
     const detail = (await r.text()).slice(0, 300);
-    if (/GROQ_SECRET/.test(detail)) throw new StageError("E_ASR_FAILED", "GROQ_SECRET is not set on the Worker, so speech can't be transcribed.");
     if (r.status === 401 || r.status === 403) throw new StageError("E_ASR_FAILED", `The Worker refused the runner (${r.status}): ${detail}`);
-    if (r.status === 429 || r.status >= 500 || r.status === 0) {
-      // R-10: exponential backoff, honouring Retry-After when Groq sends one.
+    if (/GROQ_SECRET/.test(detail)) {
+      if (localAvailable()) return transcribeLocally(path, language);
+      throw new StageError("E_ASR_FAILED", "GROQ_SECRET is not set on the Worker, so speech can't be transcribed.");
+    }
+
+    if (r.status === 429) {
+      // Groq's free tier caps audio per hour/day. Its Retry-After says when the
+      // allowance comes back: a short wait is cheaper than local Whisper, a
+      // long one isn't.
       const after = Number(r.headers.get("retry-after"));
-      const wait = Math.min(Number.isFinite(after) && after > 0 ? after * 1000 : 2000 * 2 ** attempt, 60_000);
-      if (attempt < 4) { await new Promise((res) => setTimeout(res, wait)); continue; }
-      if (r.status === 429) {
-        throw new StageError("E_ASR_RATE_LIMITED", "The transcription service's daily limit was reached (Groq free tier). Retry later.", true);
+      const wait = Number.isFinite(after) && after > 0 ? after * 1000 : Math.min(5000 * 2 ** attempt, 5 * 60 * 1000);
+      if (localAvailable() && (wait > SWITCH_TO_LOCAL_AFTER_MS || attempt >= 3)) {
+        console.log(`Groq rate-limited (retry in ${Math.round(wait / 1000)}s) — using built-in Whisper for this chunk`);
+        return transcribeLocally(path, language);
       }
+      if (waited + wait > MAX_GROQ_WAIT_MS) {
+        throw new StageError("E_ASR_RATE_LIMITED", "The transcription service's free limit was reached. Retry in a while.", true);
+      }
+      console.log(`Groq rate-limited — waiting ${Math.round(wait / 1000)}s for the allowance to reset`);
+      await sleep(wait);
+      waited += wait;
+      continue;
+    }
+
+    if (r.status >= 500 || r.status === 0) {
+      if (attempt < 4) { await sleep(2000 * 2 ** attempt); continue; }
+      if (localAvailable()) return transcribeLocally(path, language);
     }
     throw new StageError("E_ASR_FAILED", `Transcription failed (${r.status}): ${detail}`, r.status >= 500);
   }
-  throw new StageError("E_ASR_FAILED", "Transcription failed.");
 }
 
 /** Whisper word timestamps carry no punctuation; the segment text does. Copy it across. */

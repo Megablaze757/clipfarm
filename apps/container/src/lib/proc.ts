@@ -60,6 +60,9 @@ export interface Probe {
   height: number;
   fps: number;
   rotation: number;
+  vcodec: string;
+  acodec: string;
+  pixFmt: string;
 }
 
 export async function probe(path: string): Promise<Probe> {
@@ -91,5 +94,8 @@ export async function probe(path: string): Promise<Probe> {
     height,
     fps: den ? Math.min(60, num / den) || 30 : 30,
     rotation,
+    vcodec: String(v?.codec_name ?? ""),
+    acodec: String(a?.codec_name ?? ""),
+    pixFmt: String(v?.pix_fmt ?? ""),
   };
 }

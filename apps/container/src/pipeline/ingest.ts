@@ -49,7 +49,9 @@ export async function fetchSource(source: { kind: "upload"; r2_key: string } | {
     try {
       const { stdout } = await run("yt-dlp", [
         "--no-playlist", "--no-progress", "--restrict-filenames",
-        "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+        // H.264 + AAC first: the working copy can then be a stream copy (seconds)
+        // instead of a re-encode (up to real time). Falls back to anything ≤1080p.
+        "-f", "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=1080]/bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
         "--max-filesize", "5G",
         "--print", "title", "--no-simulate",
