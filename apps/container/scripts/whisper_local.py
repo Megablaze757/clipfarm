@@ -17,9 +17,26 @@ time on a 4-core GitHub runner; "small" is more accurate and ~3x slower).
 """
 import json
 import os
+import subprocess
 import sys
 
+import numpy as np
 from faster_whisper import WhisperModel
+
+
+def load_audio(path: str) -> "np.ndarray":
+    """Decode with FFmpeg to 16 kHz mono float32.
+
+    faster-whisper's own decoder calls PyAV with an argument newer PyAV
+    releases removed (`metadata_errors`), which crashes on every file. Handing
+    it raw samples avoids that code path entirely — and FFmpeg is already on
+    the runner.
+    """
+    raw = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
 
 
 def main() -> None:
@@ -33,7 +50,7 @@ def main() -> None:
 
     model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=threads)
     segments, info = model.transcribe(
-        audio,
+        load_audio(audio),
         language=language,
         word_timestamps=True,
         vad_filter=True,  # skips silence, which is most of the speed-up on podcasts

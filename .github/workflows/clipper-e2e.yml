@@ -36,7 +36,15 @@ jobs:
           curl -sSfL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | tar -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
           echo "$HOME/t" >> "$GITHUB_PATH"
           sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng > /dev/null
+      # The generated video is cached, so re-runs skip the ~10-minute encode.
+      - name: Cache the test video
+        id: vid
+        uses: actions/cache@v4
+        with:
+          path: /tmp/e/test.mp4
+          key: e2e-video-v1-${{ env.MINUTES }}min
       - name: Make the test video
+        if: steps.vid.outputs.cache-hit != 'true'
         run: |
           case "$MINUTES" in ''|*[!0-9]*) echo "::error::minutes must be a number"; exit 1 ;; esac
           mkdir -p /tmp/e && cd /tmp/e
