@@ -38,6 +38,7 @@ async function customerFor(env: Env, caller: Caller): Promise<string> {
 }
 
 export async function checkout(req: Request, env: Env, caller: Caller): Promise<Response> {
+  if (caller.guest) throw new ApiError(401, "E_UNAUTHORIZED", "sign in to upgrade — guest mode is for testing");
   if (caller.role !== "owner") throw new ApiError(403, "E_FORBIDDEN", "only the workspace owner can change the plan");
   const { plan } = await body<{ plan?: Plan["id"] }>(req);
   const price = plan ? priceFor(env, plan) : undefined;
@@ -70,6 +71,7 @@ export async function checkout(req: Request, env: Env, caller: Caller): Promise<
 }
 
 export async function portal(env: Env, caller: Caller): Promise<Response> {
+  if (caller.guest) throw new ApiError(401, "E_UNAUTHORIZED", "sign in to manage billing");
   const tenant = await dbOne<{ stripe_customer_id: string | null }>(env, `tenants?id=eq.${caller.tenantId}&select=stripe_customer_id`);
   if (!tenant?.stripe_customer_id) throw new ApiError(404, "E_NO_BILLING_ACCOUNT", "no billing account yet — upgrade first");
   const app = (env.CLIPPER_APP_URL || "").replace(/\/$/, "");

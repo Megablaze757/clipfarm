@@ -17,6 +17,8 @@ export interface Env extends PocketAthleteEnv {
   CLIPPER_GITHUB_TOKEN?: string;
   /** owner/repo holding .github/workflows/clipper-job.yml. Default Megablaze757/clipfarm. */
   CLIPPER_GITHUB_REPO?: string;
+  /** "off" requires sign-in. Anything else (default): no sign-in = shared Guest workspace. */
+  CLIPPER_GUEST_MODE?: string;
 
   /**
    * Optional. Signs media URLs and authenticates the Container's calls back.

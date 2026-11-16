@@ -54,6 +54,9 @@ CLIPPER_METER_EVENT = "clipper_source_minutes"
 # Where FFmpeg runs — see the note above [[containers]] at the bottom.
 CLIPPER_RUNNER = "github"
 CLIPPER_GITHUB_REPO = "Megablaze757/clipfarm"
+# Guest mode: with no sign-in, the API uses one shared "Guest (testing)"
+# workspace on the Creator plan. Set to "off" to require accounts again.
+CLIPPER_GUEST_MODE = "on"
 
 # Secrets — `npx wrangler secret put NAME`. Existing PocketAthlete secrets stay:
 #   GROQ_SECRET, OPENROUTER_API_KEY, NVIDIA_SECRET   (shared by both apps)

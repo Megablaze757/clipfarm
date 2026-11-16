@@ -3,7 +3,7 @@ import React, { Suspense, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { StageRail } from '@/components/stage-rail'
-import { ErrorBox, Loading, useRequireSession } from '@/components/use-session'
+import { ErrorBox, Loading, isGuest, usePolling, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, type CandidateRow, type Project } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
 import { formatDuration, SUBSCORE_LABELS } from '@/lib/tokens'
@@ -28,10 +28,12 @@ function ProjectView() {
   }, [id])
 
   useEffect(() => { if (session && id) load() }, [session, id, load])
+  usePolling(isGuest(session) && !!project && !['ready', 'failed'].includes(project.status), load)
+  useSignInOn401(error)
 
   // Live stage updates for this one project (subscribe narrowly — §13.1).
   useEffect(() => {
-    if (!session || !id) return
+    if (!session || !id || isGuest(session)) return
     const ch = supabase.channel(`project-${id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'clip_projects', filter: `id=eq.${id}` }, (payload) => {
         const next = payload.new as Project

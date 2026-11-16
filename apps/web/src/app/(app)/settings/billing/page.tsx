@@ -1,7 +1,7 @@
 'use client'
 import React, { Suspense, useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { ErrorBox, Loading, useRequireSession } from '@/components/use-session'
+import { ErrorBox, Loading, isGuest, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, type Plan } from '@/lib/api'
 
 interface Usage {
@@ -28,6 +28,7 @@ function Billing() {
     } catch (e) { setError((e as Error).message) }
   }, [])
   useEffect(() => { if (session) load() }, [session, load])
+  useSignInOn401(error)
   // The webhook can land a second or two after Stripe redirects back.
   useEffect(() => {
     if (!session || params.get('checkout') !== 'success') return
@@ -51,6 +52,7 @@ function Billing() {
         <p className="text-slate-400 text-sm mt-1">You're billed on source minutes processed, not on clips — export as many as you like.</p>
       </div>
       {params.get('checkout') === 'success' && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">Thanks — your plan is updating.</div>}
+      {isGuest(session) && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">You're in guest mode (a shared test workspace on the Creator plan). Sign in to have your own plan and billing.</div>}
       {error && <ErrorBox message={error} onRetry={load} />}
       {usage && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

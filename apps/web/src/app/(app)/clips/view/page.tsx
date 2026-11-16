@@ -2,7 +2,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { ErrorBox, Loading, useRequireSession } from '@/components/use-session'
+import { ErrorBox, Loading, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, type Plan } from '@/lib/api'
 import { autoReframe, cxAt, type Keyframe } from '@/lib/reframe'
 import { formatPrecise } from '@/lib/tokens'
@@ -91,6 +91,7 @@ function Studio() {
     } catch (e) { setError((e as Error).message) }
   }, [id])
   useEffect(() => { if (session && id) load() }, [session, id, load])
+  useSignInOn401(error)
 
   // Every change goes through here: it is what undo/redo (≥50 steps, FR-10.2) records.
   // History lives outside the state updater so React's double-invoked updaters

@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { StageRail } from '@/components/stage-rail'
-import { ErrorBox, Loading, useRequireSession } from '@/components/use-session'
+import { ErrorBox, Loading, isGuest, usePolling, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, ApiError, type Project } from '@/lib/api'
 import { uploadFile } from '@/lib/upload'
 import { supabase } from '@/lib/supabase'
@@ -40,10 +40,12 @@ export default function ProjectsPage() {
   }, [filter])
 
   useEffect(() => { if (session) load() }, [session, load])
+  usePolling(isGuest(session), load)
+  useSignInOn401(error)
 
   // Realtime: project status changes stream in without polling (§13.1).
   useEffect(() => {
-    if (!session) return
+    if (!session || isGuest(session)) return
     const ch = supabase.channel('projects-list')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clip_projects' }, () => load())
       .subscribe()
@@ -84,6 +86,12 @@ export default function ProjectsPage() {
       <div className="border-b border-slate-800/80 pb-6">
         <h1 className="text-3xl font-extrabold text-white tracking-tight">Projects</h1>
         <p className="text-slate-400 text-sm mt-1">Drop in a long video or paste a link. You get a ranked shortlist of clips, each with the reason it scored well.</p>
+        {isGuest(session) && (
+          <p className="mt-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 inline-block">
+            Guest mode: no account needed. Everyone using the site without signing in shares this workspace.{' '}
+            <Link href="/login" className="underline font-semibold">Sign in</Link> for your own.
+          </p>
+        )}
       </div>
 
       <section

@@ -237,7 +237,7 @@ async function patchTranscript(req: Request, env: Env, caller: Caller, p: string
   for (const e of edits ?? []) {
     if (Number.isInteger(e.word_index) && t.words[e.word_index]) t.words[e.word_index].w = String(e.text).slice(0, 60);
   }
-  await dbPatch(env, `transcripts?id=eq.${t.id}`, { words: t.words, edited_by: caller.userId, edited_at: new Date().toISOString() });
+  await dbPatch(env, `transcripts?id=eq.${t.id}`, { words: t.words, edited_by: caller.userId || null, edited_at: new Date().toISOString() });
   return json({ updated: (edits ?? []).length });
 }
 
@@ -327,7 +327,7 @@ async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): P
   if (b.status && ["draft", "approved"].includes(b.status)) patch.status = b.status;
   const [updated] = await dbPatch(env, `clips?id=eq.${clip.id}&tenant_id=eq.${caller.tenantId}`, patch);
   if (Math.abs(dur - (clip.t_out_ms - clip.t_in_ms)) > 20_000) {
-    await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal: "edited_heavy", payload: { from: [clip.t_in_ms, clip.t_out_ms], to: [t_in, t_out] } }).catch(() => {});
+    if (!caller.guest) await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal: "edited_heavy", payload: { from: [clip.t_in_ms, clip.t_out_ms], to: [t_in, t_out] } }).catch(() => {});
   }
   return json({ clip: updated, render_invalidated: true });
 }
@@ -336,6 +336,8 @@ async function clipFeedback(req: Request, env: Env, caller: Caller, p: string[])
   const clip = await ownClip(env, caller, p[0]);
   const { signal, payload } = await body<{ signal?: string; payload?: unknown }>(req);
   if (!["not_good", "exported", "published", "edited_heavy", "good"].includes(String(signal))) throw new ApiError(400, "E_VALIDATION", "unknown signal");
+  // Feedback rows need a real user (they train the scorer per person); guests are skipped.
+  if (caller.guest) return json({ recorded: false, reason: "guest" });
   await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal, payload: payload ?? null });
   return json({ recorded: true });
 }
@@ -349,7 +351,7 @@ async function renderClip(req: Request, env: Env, caller: Caller, p: string[], c
   if (running > 0) throw new ApiError(409, "E_CONFLICT", "this clip is already rendering");
   const job = await dbInsert<{ id: string }>(env, "render_jobs", { clip_id: clip.id, tenant_id: caller.tenantId, preset, kind: "final", status: "queued" });
   ctx.waitUntil(dispatchRender(env, job.id).catch((e) => console.error(`render ${job.id}: ${String(e)}`)));
-  await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal: "exported", payload: { preset } }).catch(() => {});
+  if (!caller.guest) await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal: "exported", payload: { preset } }).catch(() => {});
   return json({ id: job.id, status: "queued" }, 202);
 }
 

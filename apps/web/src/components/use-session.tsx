@@ -15,17 +15,39 @@ export function useSession(): Session | null | undefined {
   return session
 }
 
-/** Sends signed-out visitors to /login and back afterwards. */
-export function useRequireSession(): Session | null | undefined {
+/**
+ * GUEST MODE (testing): signed-out visitors use the app as a shared Guest
+ * workspace instead of being sent to /login. The Worker decides whether guest
+ * mode is allowed; if it's switched off, API calls return 401 and we send the
+ * visitor to sign in then.
+ */
+export interface Guest { guest: true }
+export const GUEST: Guest = { guest: true }
+export const isGuest = (s: unknown): s is Guest => !!s && (s as Guest).guest === true
+
+export function useRequireSession(): Session | Guest | undefined {
   const session = useSession()
+  return session === undefined ? undefined : session ?? GUEST
+}
+
+/** Re-runs `load` every few seconds — guests don't get Supabase Realtime pushes. */
+export function usePolling(active: boolean, load: () => void, ms = 5000) {
+  useEffect(() => {
+    if (!active) return
+    const t = setInterval(load, ms)
+    return () => clearInterval(t)
+  }, [active, load, ms])
+}
+
+/** If the Worker refuses guests (guest mode off), send the visitor to sign in. */
+export function useSignInOn401(error: string | null) {
   const router = useRouter()
   useEffect(() => {
-    if (session === null) {
-      const next = typeof window !== 'undefined' ? window.location.pathname.replace(process.env.NEXT_PUBLIC_BASE_PATH || '', '') + window.location.search : '/projects'
+    if (error && /sign in first/i.test(error)) {
+      const next = window.location.pathname.replace(process.env.NEXT_PUBLIC_BASE_PATH || '', '') + window.location.search
       router.replace(`/login?next=${encodeURIComponent(next)}`)
     }
-  }, [session, router])
-  return session
+  }, [error, router])
 }
 
 export function Loading({ label = 'Loading…' }: { label?: string }) {

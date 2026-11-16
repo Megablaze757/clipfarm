@@ -1,21 +1,49 @@
 import { internalSecret, type Env } from "./env";
-import { dbOne, rpc } from "./db";
+import { dbJson, dbOne, rpc } from "./db";
 import { ApiError, safeEqual } from "./http";
 import { planFor, type Plan } from "./plans";
 import { verifyGithubRunner } from "./github-oidc";
 
 export interface Caller {
+  /** "" for a guest — never write it to a column that references auth.users. */
   userId: string;
   email: string;
   tenantId: string;
   role: "owner" | "editor" | "viewer";
   plan: Plan;
+  guest: boolean;
 }
+
+/**
+ * GUEST MODE — for testing without an account. A request with no sign-in
+ * uses ONE shared workspace on the Creator plan (600 source minutes a month,
+ * no watermark), shared by everyone with the link. On until
+ * CLIPPER_GUEST_MODE = "off" is set on the Worker.
+ */
+export const GUEST_TENANT = "00000000-0000-4000-8000-00000000c11b";
+let guestReady = false;
+
+async function guestCaller(env: Env): Promise<Caller> {
+  if (!guestReady) {
+    await dbJson(env, "tenants?on_conflict=id", {
+      method: "POST",
+      headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+      body: JSON.stringify([{ id: GUEST_TENANT, name: "Guest (testing)", plan: "creator" }]),
+    });
+    guestReady = true;
+  }
+  return { userId: "", email: "", tenantId: GUEST_TENANT, role: "owner", plan: planFor("creator"), guest: true };
+}
+
+const guestAllowed = (env: Env) => (env.CLIPPER_GUEST_MODE ?? "on").trim().toLowerCase() !== "off";
 
 /** Verifies the Supabase JWT (the same accounts as PocketAthlete) and loads the Clipper workspace. */
 export async function requireCaller(req: Request, env: Env): Promise<Caller> {
   const auth = req.headers.get("Authorization") ?? "";
-  if (!/^Bearer\s+\S+/i.test(auth)) throw new ApiError(401, "E_UNAUTHORIZED", "sign in first");
+  if (!/^Bearer\s+\S+/i.test(auth)) {
+    if (guestAllowed(env)) return guestCaller(env);
+    throw new ApiError(401, "E_UNAUTHORIZED", "sign in first");
+  }
   const r = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: auth, apikey: env.SUPABASE_ANON_KEY },
   });
@@ -39,6 +67,7 @@ export async function requireCaller(req: Request, env: Env): Promise<Caller> {
     tenantId: profile.tenant_id,
     role: profile.role,
     plan: planFor(tenant?.plan),
+    guest: false,
   };
 }
 
