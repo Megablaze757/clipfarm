@@ -198,3 +198,40 @@ export async function ffAuthArgs(): Promise<string[]> {
   const { Authorization } = (await AUTH()) as { Authorization: string };
   return ["-headers", `Authorization: ${Authorization}\r\n`];
 }
+
+/**
+ * Fast download of a stored object: N parallel HTTP Range requests, each
+ * written straight into its slot of the file. One connection through the
+ * Worker measured ~20 MB/s (a 1-hour 1080p upload took ~2.5 min to read);
+ * eight run several times faster. Falls back to a single stream if the size
+ * can't be read.
+ */
+export async function r2DownloadParallel(key: string, dest: string, connections = 8, chunkBytes = 32 * 1024 * 1024): Promise<number> {
+  const head = await fetch(r2Url(key), { headers: { ...(await AUTH()), Range: "bytes=0-0" } });
+  const total = Number((head.headers.get("content-range") || "").split("/")[1]);
+  await head.body?.cancel().catch(() => {});
+  if (!Number.isFinite(total) || total <= 0) { await r2Download(key, dest); return 0; }
+  const fh = await open(dest, "w");
+  try {
+    await fh.truncate(total);
+    let next = 0;
+    const lane = async () => {
+      while (next < total) {
+        const start = next;
+        const end = Math.min(total, start + chunkBytes) - 1;
+        next = end + 1;
+        await retry(`range ${start}-${end}`, async () => {
+          const r = await fetch(r2Url(key), { headers: { ...(await AUTH()), Range: `bytes=${start}-${end}` } });
+          if (r.status !== 206 && r.status !== 200) throw new Error(`${r.status}`);
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (buf.length !== end - start + 1) throw new Error(`short read ${buf.length}/${end - start + 1}`);
+          await fh.write(buf, 0, buf.length, start);
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: connections }, lane));
+  } finally {
+    await fh.close();
+  }
+  return total;
+}

@@ -69,6 +69,7 @@ def main():
                 headers={"Idempotency-Key": f"e2e-{int(t0)}"})
     pid = proj["id"]
     print("project", pid, flush=True)
+    notice(f"Project {pid} created — processing starts on a GitHub runner")
 
     seen, last = {}, None
     while time.time() - t0 < 60 * 60:

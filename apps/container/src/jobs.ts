@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { probe, StageError } from "./lib/proc";
-import { db as supabase, ffAuthArgs, notifyNext, r2Delete, r2Upload, r2Url } from "./lib/worker";
+import { db as supabase, ffAuthArgs, notifyNext, r2Delete, r2DownloadParallel, r2Upload, r2Url } from "./lib/worker";
 import type { Candidate } from "./lib/types";
 import { fetchSource } from "./pipeline/ingest";
 import { analyzeLoudness, browserPlayable, energyEnvelope, extractAudio, makeMezzanine, poster } from "./pipeline/transcode";
@@ -58,10 +58,16 @@ export async function processProject(job: ProcessJob): Promise<void> {
     // thumbnails seek directly. A link is downloaded once (it has to be).
     await setStatus(projectId, "transcoding", { progress: 5 });
     stage("ingest");
-    const auth = await ffAuthArgs();
     let input: string, inputArgs: string[], inputName: string, title: string | undefined;
     if (job.source.kind === "upload") {
-      input = r2Url(job.source.r2_key); inputArgs = auth; inputName = job.source.r2_key;
+      // 8 parallel range requests, then everything reads the local file.
+      // (Streaming through one connection measured ~20 MB/s: 2.5 min for 1 h.)
+      const ext = job.source.r2_key.slice(job.source.r2_key.lastIndexOf("."));
+      input = join(dir, `source${ext}`);
+      const t = Date.now();
+      const bytes = await r2DownloadParallel(job.source.r2_key, input);
+      stage(`downloaded ${(bytes / 1e9).toFixed(2)} GB in ${((Date.now() - t) / 1000).toFixed(1)} s`);
+      inputArgs = []; inputName = job.source.r2_key;
     } else {
       const src = await fetchSource(job.source, dir);
       input = src.path; inputArgs = []; inputName = src.path; title = src.title;

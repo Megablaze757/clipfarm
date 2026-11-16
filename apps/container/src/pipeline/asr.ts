@@ -71,18 +71,26 @@ const SWITCH_TO_LOCAL_AFTER_MS = 30 * 1000;
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
+/** Set once Groq rejects the key: the rest of the job skips straight to local Whisper. */
+let groqUnusable = false;
+
 async function transcribeChunk(path: string, language: string | null): Promise<GroqResponse> {
+  if (groqUnusable && localAvailable()) return transcribeLocally(path, language);
   let waited = 0;
   for (let attempt = 0; ; attempt++) {
     const r = await transcribeViaWorker(await openAsBlob(path), language)
       .catch((e) => ({ ok: false, status: 0, headers: new Headers(), text: async () => String(e) }) as unknown as Response);
     if (r.ok) return (await r.json()) as GroqResponse;
     const detail = (await r.text()).slice(0, 300);
-    if (r.status === 401 || r.status === 403) throw new StageError("E_ASR_FAILED", `The Worker refused the runner (${r.status}): ${detail}`);
-    if (/GROQ_SECRET/.test(detail)) {
+    // Groq's own "bad key" comes back through the Worker as 401 too — tell it
+    // apart from the Worker refusing the runner, and fall back instead of failing.
+    if (/GROQ_SECRET|invalid_api_key|Invalid API Key/i.test(detail)) {
+      groqUnusable = true;
+      console.warn(`Groq unusable (${detail.slice(0, 120)}) — using built-in Whisper`);
       if (localAvailable()) return transcribeLocally(path, language);
-      throw new StageError("E_ASR_FAILED", "GROQ_SECRET is not set on the Worker, so speech can't be transcribed.");
+      throw new StageError("E_ASR_FAILED", "Groq rejected the API key (GROQ_SECRET on the Worker). Replace the key at console.groq.com.");
     }
+    if (r.status === 401 || r.status === 403) throw new StageError("E_ASR_FAILED", `The Worker refused the runner (${r.status}): ${detail}`);
 
     if (r.status === 429) {
       // Groq's free tier caps audio per hour/day. Its Retry-After says when the
