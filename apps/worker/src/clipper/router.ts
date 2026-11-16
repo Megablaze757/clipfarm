@@ -301,7 +301,7 @@ async function getClip(_r: Request, env: Env, caller: Caller, p: string[]): Prom
     `render_jobs?clip_id=eq.${clip.id}&select=id,preset,status,uri,error_code,queued_at,finished_at&order=queued_at.desc&limit=5`);
   return json({
     clip,
-    candidate: cand ? { ...cand, proxy_url: await signedUrl(env, cand.proxy_uri) } : null,
+    candidate: cand ? { ...cand, proxy_url: await signedUrl(env, cand.proxy_uri), edit_url: await signedUrl(env, cand.features?.edit_key) } : null,
     project: project ? await decorate(env, project) : null,
     words,
     renders: await Promise.all(renders.map(async (r) => ({ ...r, download_url: r.status === "completed" ? await signedUrl(env, r.uri, 24 * 3600, `${(clip.title || "clip").slice(0, 40)}.mp4`) : null }))),

@@ -128,3 +128,63 @@ test("working copy is a stream copy only for safe H.264/AAC sources", () => {
   assert.equal(canStreamCopy({ ...base, pixFmt: "yuv420p10le" }), false);
   assert.equal(canStreamCopy({ ...base, hasVideo: false }), false);
 });
+
+test("reactions: loud non-speech gaps are detected, quiet ones aren't", () => {
+  const { reactionEvents } = require("../dist/pipeline/scoring");
+  const ws = [{ w: "joke.", t0: 0, t1: 1000, conf: 1, speaker: "A" }, { w: "next", t0: 3000, t1: 3300, conf: 1, speaker: "A" },
+              { w: "quiet", t0: 6000, t1: 6300, conf: 1, speaker: "A" }];
+  const env = new Float32Array(80).fill(0.2);
+  for (let f = 12; f < 25; f++) env[f] = 1;       // laughter between 1.2 s and 2.5 s
+  const ev = reactionEvents(ws, env);
+  assert.equal(ev.length, 1);
+  assert.ok(ev[0] >= 1100 && ev[0] <= 2500);
+});
+
+test("v2 heuristics reward a closed curiosity gap, emotion and a reaction at the payoff", () => {
+  const { heuristicScore } = require("../dist/pipeline/scoring");
+  const flat = words("We met on a Tuesday. The office was fine. We had some coffee and talked for a while. Then we went home. It was a normal day really.");
+  const hot = words("Why do most founders fail? Nobody tells you this. The reason is insane, honestly. Turns out they never ask customers. That is the secret!");
+  const env = new Float32Array(400).fill(0.3);
+  const w = (ws) => ({ i0: 0, i1: ws.length - 1, t0: ws[0].t0, t1: ws[ws.length - 1].t1 });
+  const a = heuristicScore(flat, env, w(flat), 3, []);
+  const b = heuristicScore(hot, env, w(hot), 3, [hot[hot.length - 1].t1 + 500]);
+  for (const k of ["structure", "emotion", "shareability", "reaction"]) assert.ok(b.subscores[k] > a.subscores[k], k);
+  assert.ok(b.score > a.score);
+  assert.ok(b.features.badges.length <= 3);
+});
+
+test("nomination pass keeps valid moments and drops out-of-range or too-short ones", async () => {
+  const worker = require("../dist/lib/worker");
+  const { nominateMoments } = require("../dist/pipeline/moments");
+  const s = sentences(W);
+  const real = worker.llm;
+  worker.llm = async () => ({ model: "stub", text: JSON.stringify({ moments: [
+    { start: 0, end: 5, category: "hot_take", hook: "Why do most founders get pricing wrong", why: "bold question, answered" },
+    { start: 2, end: 2, category: "funny" },      // too short (< 8 s)
+    { start: 0, end: 9999, category: "story" },   // out of range
+  ] }) });
+  try {
+    const out = await nominateMoments(W, s);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].category, "hot_take");
+  } finally { worker.llm = real; }
+});
+
+test("judge blends 0-10 scores and trims a slow lead-in", async () => {
+  const worker = require("../dist/lib/worker");
+  const { refineWithLLM } = require("../dist/pipeline/llm-scoring");
+  const { heuristicScore } = require("../dist/pipeline/scoring");
+  const ws = generateWindows(W, sentences(W), "auto", 500);
+  const c = heuristicScore(W, ENV, ws[0], 3, []);
+  const before = { i0: c.i0, hook: c.subscores.hook };
+  const real = worker.llm;
+  worker.llm = async () => ({ model: "stub", text: JSON.stringify({ clips: [{ id: 0, hook: 10, payoff: 9, emotion: 8, shareability: 9, self_contained: 9, complete: 9, category: "hot_take", title: "Founders get pricing wrong", trim_start_words: 3, trim_end_words: 0, rationale: "bold claim answered fast" }] }) });
+  try {
+    const r = await refineWithLLM([c], W);
+    assert.equal(r.refined, 1);
+    assert.ok(c.subscores.hook > before.hook);
+    assert.equal(c.i0, before.i0 + 3);
+    assert.equal(c.features.category, "hot_take");
+    assert.equal(c.features.title, "Founders get pricing wrong");
+  } finally { worker.llm = real; }
+});

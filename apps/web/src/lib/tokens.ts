@@ -24,6 +24,21 @@ export const SUBSCORE_LABELS: Record<string, string> = {
   self_contained: 'Stands alone',
   complete: 'Complete',
   energy: 'Energy',
-  structure: 'Structure',
+  structure: 'Setup → payoff',
+  emotion: 'Emotion',
+  shareability: 'Shareability',
+  reaction: 'Reaction',
   novelty: 'Novelty',
+}
+
+export const CATEGORY_LABELS: Record<string, string> = {
+  story: '📖 Story',
+  hot_take: '🌶️ Hot take',
+  surprising_fact: '🤯 Surprising fact',
+  funny: '😂 Funny',
+  practical_tip: '💡 Tip',
+  emotional: '💥 Emotional',
+  debate: '⚔️ Debate',
+  quotable: '💬 Quotable',
+  reveal: '👀 Reveal',
 }

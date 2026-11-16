@@ -6,7 +6,7 @@ import { StageRail } from '@/components/stage-rail'
 import { ErrorBox, Loading, isGuest, usePolling, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, type CandidateRow, type Project } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
-import { formatDuration, SUBSCORE_LABELS } from '@/lib/tokens'
+import { CATEGORY_LABELS, formatDuration, SUBSCORE_LABELS } from '@/lib/tokens'
 
 function ProjectView() {
   const session = useRequireSession()
@@ -98,13 +98,17 @@ function ProjectView() {
               <article key={c.id} className="glass-panel rounded-2xl p-4 border border-slate-800/80 flex flex-col gap-4">
                 <div className="relative w-full aspect-[9/16] max-h-[420px] bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
                   {c.proxy_url ? (
-                    <video src={c.proxy_url} poster={c.thumb_url ?? undefined} controls playsInline preload="none" className="w-full h-full object-cover" />
+                    // Plays the clip straight from the source: the #t= fragment starts and
+                    // stops it at the clip, object-cover does the centre 9:16 crop.
+                    <video src={`${c.proxy_url}#t=${(c.t_in_ms / 1000).toFixed(2)},${(c.t_out_ms / 1000).toFixed(2)}`} poster={c.thumb_url ?? undefined} controls playsInline preload="none" className="w-full h-full object-cover" />
                   ) : <div className="w-full h-full grid place-items-center text-xs text-slate-500">No preview</div>}
                   <div className="absolute top-3 right-3 bg-slate-900/90 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-full text-xs font-bold">{Number(c.score).toFixed(0)}</div>
                   <div className="absolute top-3 left-3 text-[10px] font-mono text-slate-200 bg-slate-900/80 px-2 py-0.5 rounded">{formatDuration(c.t_in_ms)} · {Math.round((c.t_out_ms - c.t_in_ms) / 1000)}s</div>
                 </div>
                 <div className="space-y-2 flex-1">
+                  {c.features?.category && <span className="inline-block text-[10px] font-bold uppercase tracking-wide text-amber-200 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md">{CATEGORY_LABELS[c.features.category] ?? c.features.category}</span>}
                   {c.features?.title && <h3 className="text-sm font-bold text-white leading-snug">{c.features.title}</h3>}
+                  {c.features?.hook_line && <p className="text-xs text-slate-200 italic">“{c.features.hook_line}”</p>}
                   <p className="text-xs text-slate-300"><span className="text-slate-500">Why: </span>{c.rationale}</p>
                   <div className="flex flex-wrap gap-1.5">
                     {(c.features?.badges ?? []).map((b) => <span key={b} className="text-[10px] font-semibold text-indigo-200 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">{b}</span>)}

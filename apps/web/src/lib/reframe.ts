@@ -61,6 +61,8 @@ function turns(words: Word[], inMs: number, outMs: number): { t0: number; t1: nu
 export async function autoReframe(
   video: HTMLVideoElement, inMs: number, outMs: number, words: Word[], targetAspect: number,
   onProgress?: (f: number) => void,
+  /** Where the video starts in source time (per-clip previews start before the clip). */
+  videoOffsetMs = 0,
 ): Promise<ReframeResult> {
   const det = await detector()
   const wasPaused = video.paused
@@ -69,7 +71,7 @@ export async function autoReframe(
   const samples: { t: number; cx: number | null; area: number }[] = []
   let ts = performance.now()
   for (let t = inMs; t < outMs; t += step) {
-    await seek(video, t / 1000)
+    await seek(video, Math.max(0, (t - videoOffsetMs) / 1000))
     ts = Math.max(ts + 1, performance.now())
     const res = det.detectForVideo(video, ts)
     const faces = (res?.detections ?? []).map((d: any) => d.boundingBox).filter(Boolean)

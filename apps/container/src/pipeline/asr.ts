@@ -12,6 +12,15 @@ import type { Segment, Transcript, Word } from "../lib/types";
  */
 const CHUNK_S = 600;
 const OVERLAP_S = 2;
+/** Chunks transcribed at once (Groq allows ~20 requests/min on the free tier). */
+const ASR_PARALLEL = 3;
+
+/** Runs task(0..count-1) with at most `limit` in flight. */
+export async function pool(count: number, limit: number, task: (i: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const lane = async () => { while (next < count) { const i = next++; await task(i); } };
+  await Promise.all(Array.from({ length: Math.min(limit, count) }, lane));
+}
 
 interface GroqWord { word: string; start: number; end: number }
 interface GroqSegment { id: number; start: number; end: number; text: string; avg_logprob?: number; no_speech_prob?: number }
@@ -132,11 +141,18 @@ export async function transcribe(audio: string, durationMs: number, dir: string,
   const segments: Segment[] = [];
   let detected: string | null = null;
 
+  // Three chunks in flight at once: a 1-hour source is 6 chunks, so this is
+  // ~2 Groq round-trips instead of 6. Results are merged in order below.
+  const results: GroqResponse[] = new Array(chunks);
+  await pool(chunks, ASR_PARALLEL, async (i) => {
+    const path = join(dir, `asr_${i}.flac`);
+    await ffmpeg(["-ss", String(i * CHUNK_S), "-t", String(CHUNK_S + OVERLAP_S), "-i", audio, "-ac", "1", "-ar", "16000", "-c:a", "flac", path]);
+    results[i] = await transcribeChunk(path, language);
+  });
+
   for (let i = 0; i < chunks; i++) {
     const startS = i * CHUNK_S;
-    const path = join(dir, `asr_${i}.flac`);
-    await ffmpeg(["-ss", String(startS), "-t", String(CHUNK_S + OVERLAP_S), "-i", audio, "-ac", "1", "-ar", "16000", "-c:a", "flac", path]);
-    const res = await transcribeChunk(path, language);
+    const res = results[i];
     detected ??= res.language ?? null;
     const offsetMs = startS * 1000;
     // Seam dedup: chunk i owns [start + 1 s, next start + 1 s).
@@ -180,22 +196,51 @@ export async function transcribe(audio: string, durationMs: number, dir: string,
 async function diarize(segments: Segment[]): Promise<string[]> {
   segments.forEach((s) => (s.speaker = "A"));
   if (segments.length < 4 || segments.length > 1500) return ["A"];
-  const BATCH = 80;
-  const seen = new Set<string>(["A"]);
-  for (let i = 0; i < segments.length; i += BATCH) {
-    const batch = segments.slice(i, i + BATCH);
-    const prev = i > 0 ? `Previous segment ${i - 1} was speaker ${segments[i - 1].speaker}.\n` : "";
+  // Batches run 4 at a time. Each batch also labels the last OVERLAP segments
+  // of the batch before it; afterwards those shared segments tell us how to
+  // map each batch's "A/B" onto the previous batch's, so labels stay
+  // consistent across the whole source even though batches ran in parallel.
+  const BATCH = 100;
+  const OVERLAP = 8;
+  const starts: number[] = [];
+  for (let i = 0; i < segments.length; i += BATCH) starts.push(i);
+  const labels: (Map<number, string> | null)[] = new Array(starts.length).fill(null);
+  await pool(starts.length, 4, async (b) => {
+    const from = Math.max(0, starts[b] - (b > 0 ? OVERLAP : 0));
+    const to = Math.min(segments.length, starts[b] + BATCH);
     const res = await llm(
-      'You label speaker turns in a transcript. Speakers are "A", "B", "C"... in order of first appearance; keep labels consistent with any previous label given. Respond ONLY with JSON: {"labels":[{"i":number,"s":"A"}]} covering every segment index.',
-      prev + batch.map((s, k) => `${i + k}: ${s.text}`).join("\n"),
-      1200,
+      'You label speaker turns in a transcript. Speakers are "A", "B", "C"... in order of first appearance within this excerpt. Respond ONLY with JSON: {"labels":[{"i":number,"s":"A"}]} covering every segment index.',
+      segments.slice(from, to).map((s, k) => `${from + k}: ${s.text}`).join("\n"),
+      1400,
     );
     const parsed = res ? parseJsonObject<{ labels?: { i: number; s: string }[] }>(res.text) : null;
-    if (!parsed?.labels) return ["A"]; // degrade gracefully, don't half-label
-    for (const l of parsed.labels) {
-      const seg = segments[l.i];
-      if (seg && /^[A-F]$/.test(l.s)) { seg.speaker = l.s; seen.add(l.s); }
+    if (!parsed?.labels) return;
+    labels[b] = new Map(parsed.labels.filter((l) => /^[A-F]$/.test(l.s) && l.i >= from && l.i < to).map((l) => [l.i, l.s]));
+  });
+  if (labels.some((m) => !m)) return ["A"]; // degrade gracefully, don't half-label
+
+  // Stitch: map each batch's labels onto the previous (already stitched) batch.
+  const seen = new Set<string>();
+  for (let b = 0; b < starts.length; b++) {
+    const mine = labels[b]!;
+    const rename = new Map<string, string>();
+    if (b > 0) {
+      const votes = new Map<string, Map<string, number>>();
+      for (let i = starts[b] - OVERLAP; i < starts[b]; i++) {
+        const theirs = segments[i]?.speaker, ours = mine.get(i);
+        if (!theirs || !ours) continue;
+        const v = votes.get(ours) ?? new Map<string, number>();
+        v.set(theirs, (v.get(theirs) ?? 0) + 1);
+        votes.set(ours, v);
+      }
+      for (const [ours, v] of votes) rename.set(ours, [...v.entries()].sort((x, y) => y[1] - x[1])[0][0]);
+    }
+    for (let i = starts[b]; i < Math.min(segments.length, starts[b] + BATCH); i++) {
+      const raw = mine.get(i);
+      if (!raw) continue;
+      segments[i].speaker = rename.get(raw) ?? raw;
+      seen.add(segments[i].speaker!);
     }
   }
-  return [...seen].sort();
+  return seen.size ? [...seen].sort() : ["A"];
 }

@@ -1,57 +1,105 @@
-import type { Candidate } from "../lib/types";
+import type { Candidate, Word } from "../lib/types";
 import { llm, parseJsonObject } from "../lib/worker";
 import { composite } from "./scoring";
+import { textOf } from "./text";
 
 /**
- * §6.4 scoring pipeline: batches of 15 candidates per call through the shared
- * AI ladder (Groq first, then OpenRouter, then NVIDIA — the Worker decides).
- * The model refines hook / structure / self-containedness / completeness and
- * writes the title and rationale. If a batch fails to parse, or every provider
- * is down, those candidates keep their heuristic scores — the pipeline never
- * stalls on AI.
+ * Pass 2 of the clip engine: JUDGING. Batches of 12 candidates per call
+ * through the shared AI ladder (Groq → OpenRouter → NVIDIA; the Worker
+ * decides). The rubric follows the evidence:
+ *  - hook / completion: what short-form platforms rank on;
+ *  - payoff: curiosity gaps opened and closed (Loewenstein);
+ *  - emotion: high-arousal content is shared more (Berger & Milkman 2012);
+ *  - shareability: sends, debates, "this is so me".
+ * Scores are 0-10 with anchors, so different models land on the same scale.
+ * The judge can also trim a slow lead-in or a trailing ramble so the clip
+ * starts ON its hook. If a batch fails, those candidates keep their heuristic
+ * scores — the pipeline never stalls on AI.
  */
-const SYSTEM = `You rank moments from long-form video for short-form clips (TikTok/Reels/Shorts).
-Judge each excerpt ONLY on whether it works as a standalone clip for someone who never saw the rest.
-Score 0.0-1.0:
-- hook: do the first ~3 seconds make a stranger keep watching? (question, bold claim, curiosity gap, surprise)
-- self_contained: is every person/thing referred to introduced inside the excerpt? Penalise "he/she/they/that" with no antecedent.
-- complete: does it end on a finished thought, not mid-argument?
-- structure: does it have a setup and a payoff (story, argument, punchline, lesson)?
-Also write:
-- title: a punchy clip title, max 8 words, no hashtags, no emojis
-- rationale: why it works (or doesn't), max 12 words, grounded in what is said
-Respond ONLY with JSON: {"clips":[{"id":number,"hook":number,"self_contained":number,"complete":number,"structure":number,"title":string,"rationale":string}]}`;
+const SYSTEM = `You are judging candidate clips cut from a long podcast/stream, for TikTok, Reels and Shorts.
+Judge each excerpt as a STANDALONE clip seen by a stranger scrolling a feed.
+Score every dimension 0-10 using these anchors (be harsh; most moments are 3-6):
+- hook: would the FIRST LINE stop the scroll? 9-10 bold claim/shocking number/conflict/"you're doing X wrong"; 5 decent intro; 0-2 filler, "so yeah", "anyway".
+- payoff: does it open a question or tension and RESOLVE it inside the clip? 9-10 setup→twist/punchline/answer; 5 informative but flat; 0-2 never resolves or resolves off-clip.
+- emotion: intensity of HIGH-AROUSAL emotion — amusement, awe, outrage, anxiety, excitement. 9-10 laugh-out-loud or jaw-drop; 5 mildly interesting; 0-2 calm/flat/sad-and-slow.
+- shareability: would someone send it to a friend, stitch it, or argue in comments? 9-10 hot take / "tag someone who" / must-know tip; 0-2 nobody would share.
+- self_contained: is everyone and everything referred to introduced inside the clip? 0-2 if it depends on earlier context ("he", "that thing we said").
+- complete: does it end on a finished thought or punchline (ideally a satisfying or loopable last line)? 0-2 if it ends mid-argument.
+Also return:
+- category: one of story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable, reveal
+- title: a scroll-stopping title, max 8 words, no hashtags/emojis, no clickbait the clip doesn't deliver
+- hook_line: the strongest opening line, copied from the excerpt
+- trim_start_words: how many words to cut from the START so the clip opens on its hook (0 if it already does; never cut needed context)
+- trim_end_words: how many words to cut from the END to drop a trailing ramble (0 if the ending is right)
+- rationale: why it will (or won't) perform, max 12 words
+Respond ONLY with JSON: {"clips":[{"id":number,"hook":n,"payoff":n,"emotion":n,"shareability":n,"self_contained":n,"complete":n,"category":"...","title":"...","hook_line":"...","trim_start_words":n,"trim_end_words":n,"rationale":"..."}]}`;
 
-interface Judged { id: number; hook: number; self_contained: number; complete: number; structure: number; title?: string; rationale?: string }
+interface Judged {
+  id: number; hook: number; payoff: number; emotion: number; shareability: number; self_contained: number; complete: number;
+  category?: string; title?: string; hook_line?: string; trim_start_words?: number; trim_end_words?: number; rationale?: string;
+}
 
-const n01 = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v > 1 ? v / 100 : v)) : null);
+/** 0-10 (or 0-1, or 0-100) → 0-1. */
+const n01 = (v: unknown) => {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(1, n > 10 ? n / 100 : n > 1 ? n / 10 : n));
+};
 
-export async function refineWithLLM(cands: Candidate[], batchSize = 15): Promise<{ refined: number; model: string | null }> {
+export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize = 12): Promise<{ refined: number; model: string | null }> {
   let refined = 0;
   let model: string | null = null;
-  for (let b = 0; b < cands.length; b += batchSize) {
-    const batch = cands.slice(b, b + batchSize);
-    const user = batch.map((c, k) => `### id ${k}\n${c.text.slice(0, 1400)}`).join("\n\n");
-    const res = await llm(SYSTEM, user, 2200);
-    const parsed = res ? parseJsonObject<{ clips?: Judged[] }>(res.text) : null;
-    if (!parsed?.clips?.length) continue;
-    model = res!.model;
-    for (const j of parsed.clips) {
-      const c = batch[Number(j.id)];
-      if (!c) continue;
-      const hook = n01(j.hook), sc = n01(j.self_contained), comp = n01(j.complete), st = n01(j.structure);
-      // Blend, don't replace: the heuristics see audio energy and timing the model can't.
-      if (hook != null) c.subscores.hook = 0.6 * hook + 0.4 * c.subscores.hook;
-      if (sc != null) c.subscores.self_contained = 0.5 * sc + 0.5 * c.subscores.self_contained;
-      if (comp != null) c.subscores.complete = 0.5 * comp + 0.5 * c.subscores.complete;
-      if (st != null) c.subscores.structure = 0.6 * st + 0.4 * c.subscores.structure;
-      if (typeof j.title === "string" && j.title.trim()) c.features.title = j.title.trim().slice(0, 80);
-      if (typeof j.rationale === "string" && j.rationale.trim()) c.rationale = j.rationale.trim().split(/\s+/).slice(0, 12).join(" ");
-      c.features.scorer = "llm";
-      c.features.model = res!.model;
-      c.score = composite(c.subscores);
-      refined++;
-    }
+  const batches: Candidate[][] = [];
+  for (let b = 0; b < cands.length; b += batchSize) batches.push(cands.slice(b, b + batchSize));
+
+  // Three batches at a time.
+  for (let b = 0; b < batches.length; b += 3) {
+    await Promise.all(batches.slice(b, b + 3).map(async (batch) => {
+      const user = batch.map((c, k) => {
+        const secs = Math.round((c.t_out_ms - c.t_in_ms) / 1000);
+        const hint = c.features.nominated ? ` (editor flagged: ${c.features.category ?? "moment"})` : "";
+        return `### id ${k} — ${secs}s${hint}\n${c.text.slice(0, 1600)}`;
+      }).join("\n\n");
+      const res = await llm(SYSTEM, user, 2600);
+      const parsed = res ? parseJsonObject<{ clips?: Judged[] }>(res.text) : null;
+      if (!parsed?.clips?.length) return;
+      model = res!.model;
+      for (const j of parsed.clips) {
+        const c = batch[Number(j.id)];
+        if (!c) continue;
+        const s = c.subscores;
+        // Blend, don't replace: the heuristics see audio energy, reactions and
+        // timing the model can't.
+        const mix = (key: keyof typeof s, v: number | null, w: number) => { if (v != null) s[key] = w * v + (1 - w) * s[key]; };
+        mix("hook", n01(j.hook), 0.65);
+        mix("structure", n01(j.payoff), 0.65);
+        mix("emotion", n01(j.emotion), 0.6);
+        mix("shareability", n01(j.shareability), 0.7);
+        mix("self_contained", n01(j.self_contained), 0.5);
+        mix("complete", n01(j.complete), 0.5);
+
+        // Tighten: start on the hook, drop a trailing ramble — within limits.
+        const len = c.i1 - c.i0 + 1;
+        const cutStart = Math.max(0, Math.min(Math.floor(len * 0.4), Math.round(Number(j.trim_start_words) || 0)));
+        const cutEnd = Math.max(0, Math.min(Math.floor(len * 0.25), Math.round(Number(j.trim_end_words) || 0)));
+        const i0 = c.i0 + cutStart, i1 = c.i1 - cutEnd;
+        if ((cutStart || cutEnd) && i1 > i0 && words[i1].t1 - words[i0].t0 >= 10_000) {
+          c.i0 = i0; c.i1 = i1;
+          c.t_in_ms = words[i0].t0; c.t_out_ms = words[i1].t1;
+          c.text = textOf(words, i0, i1);
+          c.features.signals.push("tightened to the hook");
+        }
+
+        if (typeof j.title === "string" && j.title.trim()) c.features.title = j.title.trim().slice(0, 80);
+        if (typeof j.hook_line === "string" && j.hook_line.trim()) c.features.hook_line = j.hook_line.trim().slice(0, 140);
+        if (typeof j.category === "string" && j.category.trim()) c.features.category = j.category.trim().slice(0, 30);
+        if (typeof j.rationale === "string" && j.rationale.trim()) c.rationale = j.rationale.trim().split(/\s+/).slice(0, 12).join(" ");
+        c.features.scorer = "llm";
+        c.features.model = res!.model;
+        c.score = composite(s);
+        refined++;
+      }
+    }));
   }
   return { refined, model };
 }

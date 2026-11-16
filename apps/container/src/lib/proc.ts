@@ -63,18 +63,20 @@ export interface Probe {
   vcodec: string;
   acodec: string;
   pixFmt: string;
+  /** ffprobe format_name, e.g. "mov,mp4,m4a,3gp,3g2,mj2" or "matroska,webm". */
+  format: string;
 }
 
-export async function probe(path: string): Promise<Probe> {
+export async function probe(path: string, inputArgs: string[] = []): Promise<Probe> {
   let out: string;
   try {
-    ({ stdout: out } = await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", path], { timeoutMs: 120_000 }));
+    ({ stdout: out } = await run("ffprobe", ["-v", "error", ...inputArgs, "-print_format", "json", "-show_format", "-show_streams", path], { timeoutMs: 120_000 }));
   } catch (e) {
     const msg = (e as Error).message;
     if (/drm|encrypt|protected/i.test(msg)) throw new StageError("E_SOURCE_DRM", "This file is DRM-protected and can't be processed.");
     throw new StageError("E_INGEST_CORRUPT", "That file couldn't be read as audio or video.");
   }
-  const j = JSON.parse(out) as { format?: { duration?: string }; streams?: any[] };
+  const j = JSON.parse(out) as { format?: { duration?: string; format_name?: string }; streams?: any[] };
   const streams = j.streams ?? [];
   if (streams.some((s) => s.tags?.encryption || s.codec_tag_string === "encv" || s.codec_tag_string === "enca")) {
     throw new StageError("E_SOURCE_DRM", "This file is DRM-protected and can't be processed.");
@@ -97,5 +99,6 @@ export async function probe(path: string): Promise<Probe> {
     vcodec: String(v?.codec_name ?? ""),
     acodec: String(a?.codec_name ?? ""),
     pixFmt: String(v?.pix_fmt ?? ""),
+    format: String(j.format?.format_name ?? ""),
   };
 }

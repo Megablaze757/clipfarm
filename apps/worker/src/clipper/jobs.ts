@@ -138,7 +138,7 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
   const cand = await dbOne<{ project_id: string }>(env, `candidates?id=eq.${clip.candidate_id}&select=project_id`);
   if (!cand) return;
   const [project, transcript, tenant] = await Promise.all([
-    dbOne<{ id: string; title: string }>(env, `projects?id=eq.${cand.project_id}&select=id,title`),
+    dbOne<{ id: string; title: string; review_proxy_key: string | null }>(env, `projects?id=eq.${cand.project_id}&select=id,title,review_proxy_key`),
     dbOne<{ words: { w: string; t0: number; t1: number }[] }>(env, `transcripts?project_id=eq.${cand.project_id}&select=words`),
     dbOne<{ plan: string }>(env, `tenants?id=eq.${clip.tenant_id}&select=plan`),
   ]);
@@ -147,7 +147,9 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
   const spec = {
     version: 3,
     project_id: project?.id ?? cand.project_id,
-    mezzanine_key: `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
+    // The media the project plays from: the original upload when browsers can
+    // play it, otherwise its working copy. (Older projects: the mezzanine.)
+    mezzanine_key: project?.review_proxy_key || `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
     output_key: `${clip.tenant_id}/projects/${cand.project_id}/renders/${job.id}.mp4`,
     trim: { in_ms: clip.t_in_ms, out_ms: clip.t_out_ms },
     crop: {

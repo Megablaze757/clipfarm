@@ -68,7 +68,7 @@ export interface CandidateRow {
   t_out_ms: number
   score: number
   subscores: Record<string, number>
-  features: { badges?: string[]; signals?: string[]; unresolved?: string | null; title?: string; scorer?: string }
+  features: { badges?: string[]; signals?: string[]; unresolved?: string | null; title?: string; scorer?: string; category?: string; hook_line?: string; nominated?: boolean }
   rationale: string | null
   proxy_url: string | null
   thumb_url: string | null

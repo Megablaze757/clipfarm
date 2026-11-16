@@ -49,8 +49,13 @@ export function cropXExpr(keys: { t_ms: number; cx: number }[], srcW: number, cr
   return `if(lt(t\\,${(ks[0].t_ms / 1000).toFixed(3)})\\,${px(ks[0].cx)}\\,${expr})`;
 }
 
-export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: string, out: string): Promise<{ durationMs: number }> {
-  const info = await probe(mezzanine);
+/**
+ * `mezzanine` can be a local file or an R2 URL; with `inputArgs` (auth
+ * headers) FFmpeg seeks the stored video over HTTP Range and reads only the
+ * seconds being cut, instead of downloading the whole source first.
+ */
+export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: string, out: string, inputArgs: string[] = []): Promise<{ durationMs: number }> {
+  const info = await probe(mezzanine, inputArgs);
   const { w, h } = spec.scale;
   const durS = (spec.trim.out_ms - spec.trim.in_ms) / 1000;
   const ss = (spec.trim.in_ms / 1000).toFixed(3);
@@ -99,7 +104,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const { target_lufs: I, tp: TP } = spec.audio.loudnorm;
   let af = `loudnorm=I=${I}:TP=${TP}:LRA=11`;
   try {
-    const { stderr } = await ffmpeg(["-ss", ss, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${af}:print_format=json`, "-f", "null", "-"]);
+    const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${af}:print_format=json`, "-f", "null", "-"]);
     const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
     if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
       af += `:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
@@ -108,7 +113,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   af += ",aresample=48000";
 
   await ffmpeg([
-    "-ss", ss, "-i", mezzanine, "-t", durS.toFixed(3),
+    "-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]", "-map", "0:a:0?", "-af", af,
     "-c:v", "libx264", "-crf", String(spec.encode.crf), "-preset", spec.encode.preset, "-profile:v", "high",

@@ -97,9 +97,18 @@ jobs:
           path: ~/.cache/huggingface
           key: whisper-base-v1
 
+      # Installed packages are cached by lockfile, so most jobs skip `npm ci`.
+      - name: Cache node_modules
+        id: nm
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/container/node_modules
+          key: nm-container-${{ hashFiles('package-lock.json') }}
       - name: Build the pipeline
         run: |
-          npm ci --workspace=apps/container --no-audit --no-fund
+          [ "${{ steps.nm.outputs.cache-hit }}" = "true" ] || npm ci --workspace=apps/container --no-audit --no-fund
           npm run build --workspace=apps/container
 
       # Long sources need room: source + working copy + audio can pass 10 GB.

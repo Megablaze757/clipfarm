@@ -29,12 +29,15 @@ export interface Sentence {
 }
 
 export interface Subscores {
-  hook: number;
-  self_contained: number;
-  complete: number;
-  energy: number;
-  structure: number;
-  novelty: number;
+  hook: number;           // the first ~3 s stop the scroll
+  self_contained: number; // makes sense to a stranger who never saw the rest
+  complete: number;       // ends on a finished thought / punchline
+  energy: number;         // vocal energy and pace
+  structure: number;      // setup → payoff: a curiosity gap opened AND closed (Loewenstein)
+  emotion: number;        // high-arousal emotion — amusement, awe, anger, anxiety (Berger & Milkman 2012)
+  shareability: number;   // would someone send it to a friend: identity, practical value, a take to argue with
+  reaction: number;       // laughter / applause / loud non-speech at or right after the payoff
+  novelty: number;        // distinct from the other picks (MMR)
 }
 
 export interface Candidate {
@@ -53,6 +56,17 @@ export interface Candidate {
     scorer?: "llm" | "heuristic";
     model?: string;
     thumb_key?: string;
+    /** The editor's preview: clip ±60 s at 360p, starting at edit_offset_ms in source time. */
+    edit_key?: string;
+    edit_offset_ms?: number;
+    edit_duration_ms?: number;
+    /** story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable */
+    category?: string;
+    hook_line?: string;
+    /** Found by the whole-transcript nomination pass (moments.ts). */
+    nominated?: boolean;
+    /** Laughter/applause-like events inside or right after the clip. */
+    reactions?: number;
   };
   rationale: string;
 }

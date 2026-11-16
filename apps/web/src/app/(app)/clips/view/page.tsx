@@ -11,7 +11,7 @@ interface Word { i: number; w: string; t0: number; t1: number; speaker?: string 
 interface Render { id: string; preset: string; status: string; download_url: string | null; error_code?: string | null }
 interface ClipResponse {
   clip: { id: string; title: string | null; t_in_ms: number; t_out_ms: number; status: string; edits: any }
-  candidate: { id: string; score: number; rationale: string | null; features: any } | null
+  candidate: { id: string; score: number; rationale: string | null; features: any; edit_url?: string | null } | null
   project: { id: string; title: string; review_url: string | null; duration_ms: number | null } | null
   words: Word[]
   renders: Render[]
@@ -82,10 +82,17 @@ function Studio() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const [srcAspect, setSrcAspect] = useState(16 / 9)
+  // The editor video is a short preview of just this clip's neighbourhood
+  // (clip ±60 s), not the whole source. `offRef` is where that preview starts
+  // in source time, so: source ms = video seconds × 1000 + offset.
+  const offRef = useRef(0)
+  const toVideo = (ms: number) => Math.max(0, (ms - offRef.current) / 1000)
+  const fromVideo = (s: number) => s * 1000 + offRef.current
 
   const load = useCallback(async () => {
     try {
       const r = await api.get<ClipResponse>(`/v1/clips/${id}`)
+      offRef.current = r.candidate?.edit_url ? Number(r.candidate?.features?.edit_offset_ms ?? 0) : 0
       setData(r); setState(toState(r)); setRenders(r.renders)
       setPreset(ASPECTS[toState(r).aspect]?.presets[0].id ?? 'tiktok')
     } catch (e) { setError((e as Error).message) }
@@ -148,8 +155,8 @@ function Studio() {
     const tick = () => {
       const v = videoRef.current
       if (v && state) {
-        const t = v.currentTime * 1000
-        if (!v.paused && t >= state.t_out) { v.pause(); v.currentTime = state.t_in / 1000 }
+        const t = fromVideo(v.currentTime)
+        if (!v.paused && t >= state.t_out) { v.pause(); v.currentTime = toVideo(state.t_in) }
         setNow(t)
       }
       raf = requestAnimationFrame(tick)
@@ -161,7 +168,7 @@ function Studio() {
   function play() {
     const v = videoRef.current
     if (!v || !state) return
-    if (v.currentTime * 1000 < state.t_in || v.currentTime * 1000 >= state.t_out - 100) v.currentTime = state.t_in / 1000
+    if (fromVideo(v.currentTime) < state.t_in || fromVideo(v.currentTime) >= state.t_out - 100) v.currentTime = toVideo(state.t_in)
     v.play().catch(() => {})
   }
 
@@ -170,7 +177,7 @@ function Studio() {
     if (!v || !state || !data) return
     setReframing(0); setReframeNote(null)
     try {
-      const res = await autoReframe(v, state.t_in, state.t_out, data.words, ASPECTS[state.aspect].ratio, setReframing)
+      const res = await autoReframe(v, state.t_in, state.t_out, data.words, ASPECTS[state.aspect].ratio, setReframing, offRef.current)
       update((s) => ({ ...s, mode: res.mode === 'manual' ? 'auto' : res.mode, keyframes: res.keyframes }))
       setReframeNote(res.note)
     } catch (e) {
@@ -179,7 +186,7 @@ function Studio() {
       setReframeNote(`Face tracking isn't available in this browser (${(e as Error).message}). Using a centre crop.`)
     } finally {
       setReframing(null)
-      v.currentTime = state.t_in / 1000
+      v.currentTime = toVideo(state.t_in)
     }
   }
 
@@ -223,8 +230,11 @@ function Studio() {
   const frameW = Math.round(frameH * aspect.ratio)
   const vidW = frameH * srcAspect
   const left = state.mode === 'fit' ? (frameW - vidW) / 2 : Math.min(0, Math.max(frameW - vidW, frameW / 2 - cx * vidW))
-  const windowStart = Math.max(0, data.clip.t_in_ms - 60_000)
-  const windowEnd = Math.min(data.project?.duration_ms ?? data.clip.t_out_ms + 60_000, data.clip.t_out_ms + 60_000)
+  // Trimming can only go as far as the preview covers.
+  const editUrl = data.candidate?.edit_url ?? data.project?.review_url ?? null
+  const editEnd = data.candidate?.edit_url ? offRef.current + Number(data.candidate?.features?.edit_duration_ms ?? 0) : Infinity
+  const windowStart = Math.max(0, data.clip.t_in_ms - 60_000, offRef.current)
+  const windowEnd = Math.min(data.project?.duration_ms ?? data.clip.t_out_ms + 60_000, data.clip.t_out_ms + 60_000, editEnd)
   const dur = state.t_out - state.t_in
   const fixed = (w: Word) => state.fixes[w.i] ?? w.w
 
@@ -251,9 +261,9 @@ function Studio() {
           <div className="glass-panel rounded-3xl p-5 border border-slate-800 flex flex-col items-center gap-4">
             <div ref={frameRef} className="relative bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl" style={{ width: frameW, height: frameH, maxWidth: '100%' }}>
               {state.mode === 'fit' && <div className="absolute inset-0 bg-slate-800/60 blur-xl" />}
-              {data.project?.review_url ? (
-                <video ref={videoRef} src={data.project.review_url} crossOrigin="anonymous" playsInline preload="auto"
-                  onLoadedMetadata={(e) => { const v = e.currentTarget; setSrcAspect(v.videoWidth / Math.max(1, v.videoHeight)); v.currentTime = state.t_in / 1000 }}
+              {editUrl ? (
+                <video ref={videoRef} src={editUrl} crossOrigin="anonymous" playsInline preload="auto"
+                  onLoadedMetadata={(e) => { const v = e.currentTarget; setSrcAspect(v.videoWidth / Math.max(1, v.videoHeight)); v.currentTime = toVideo(state.t_in) }}
                   onClick={() => (videoRef.current?.paused ? play() : videoRef.current?.pause())}
                   className="absolute top-0 max-w-none cursor-pointer"
                   style={state.mode === 'fit' ? { width: frameW, height: frameW / srcAspect, top: (frameH - frameW / srcAspect) / 2, left: 0 } : { height: frameH, width: vidW, left }} />
@@ -286,11 +296,11 @@ function Studio() {
               </div>
               <label className="block text-[11px] text-slate-400">Start
                 <input type="range" className="w-full accent-indigo-500" min={windowStart} max={windowEnd} step={100} value={state.t_in}
-                  onChange={(e) => { const v = Number(e.target.value); if (state.t_out - v >= 8000) { update((s) => ({ ...s, t_in: v })); if (videoRef.current) videoRef.current.currentTime = v / 1000 } }} />
+                  onChange={(e) => { const v = Number(e.target.value); if (state.t_out - v >= 8000) { update((s) => ({ ...s, t_in: v })); if (videoRef.current) videoRef.current.currentTime = toVideo(v) } }} />
               </label>
               <label className="block text-[11px] text-slate-400">End
                 <input type="range" className="w-full accent-indigo-500" min={windowStart} max={windowEnd} step={100} value={state.t_out}
-                  onChange={(e) => { const v = Number(e.target.value); if (v - state.t_in >= 8000) { update((s) => ({ ...s, t_out: v })); if (videoRef.current) videoRef.current.currentTime = Math.max(state.t_in, v - 2000) / 1000 } }} />
+                  onChange={(e) => { const v = Number(e.target.value); if (v - state.t_in >= 8000) { update((s) => ({ ...s, t_out: v })); if (videoRef.current) videoRef.current.currentTime = toVideo(Math.max(state.t_in, v - 2000)) } }} />
               </label>
               <p className="text-[11px] text-slate-500">Tip: Alt-click a word to start there, Shift-click to end there. Space plays/pauses.</p>
             </div>
@@ -349,7 +359,7 @@ function Studio() {
               ))}
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={runReframe} disabled={reframing != null || !data.project?.review_url} className="px-3 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50">
+              <button onClick={runReframe} disabled={reframing != null || !editUrl} className="px-3 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50">
                 {reframing != null ? 'Tracking…' : 'Auto-frame the speaker'}
               </button>
               {(['center', 'fit'] as const).map((m) => (

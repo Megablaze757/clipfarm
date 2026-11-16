@@ -12,7 +12,9 @@ import { ApiError, body, json } from "./http";
  * last; the Worker body limit is 100 MB, so the client uses 50 MiB parts.
  */
 export const PART_SIZE = 50 * 1024 * 1024;
-const MAX_UPLOAD_BYTES = 5 * 1024 ** 3; // FR-1.1
+// FR-1.1 said 5 GB; long streams need more. Multipart allows 10,000 × 50 MiB,
+// and the source is deleted as soon as it has been processed, so storage stays small.
+const MAX_UPLOAD_BYTES = 15 * 1024 ** 3;
 const ALLOWED = /\.(mp4|mov|mkv|webm|mp3|wav|m4a|flac)$/i;
 
 const ownKey = (caller: Caller, key: unknown): string => {
@@ -28,7 +30,7 @@ export async function uploadCreate(req: Request, env: Env, caller: Caller): Prom
   if (!ALLOWED.test(name)) {
     throw new ApiError(400, "E_INGEST_UNSUPPORTED_CODEC", "upload an mp4, mov, mkv, webm, mp3, wav, m4a or flac file");
   }
-  if (Number(size) > MAX_UPLOAD_BYTES) throw new ApiError(400, "E_INGEST_TOO_LARGE", "files are limited to 5 GB");
+  if (Number(size) > MAX_UPLOAD_BYTES) throw new ApiError(400, "E_INGEST_TOO_LARGE", "files are limited to 15 GB");
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   const key = `${caller.tenantId}/uploads/${crypto.randomUUID()}/source${ext}`;
   const upload = await env.R2_BUCKET.createMultipartUpload(key, {

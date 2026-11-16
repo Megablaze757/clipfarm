@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { r2Download } from "../lib/worker";
 import { run, StageError } from "../lib/proc";
 
-const MAX_BYTES = 5 * 1024 ** 3;
+const MAX_BYTES = 15 * 1024 ** 3; // a 5-6 h 1080p stream is often 5-10 GB
 
 /** Private, loopback, link-local, CGNAT, multicast… anything not the public internet. */
 export function isPrivateAddress(ip: string): boolean {
@@ -53,7 +53,7 @@ export async function fetchSource(source: { kind: "upload"; r2_key: string } | {
         // instead of a re-encode (up to real time). Falls back to anything ≤1080p.
         "-f", "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=1080]/bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
-        "--max-filesize", "5G",
+        "--max-filesize", "15G",
         "--print", "title", "--no-simulate",
         "-o", join(dir, "source.%(ext)s"),
         url.toString(),
@@ -83,13 +83,13 @@ export async function fetchSource(source: { kind: "upload"; r2_key: string } | {
     if (r.status === 403 || r.status === 401) throw new StageError("E_SOURCE_PRIVATE", `The link refused the download (${r.status}).`);
     if (r.status === 451) throw new StageError("E_SOURCE_GEO_BLOCKED", "That file is blocked in this region.");
     if (!r.ok || !r.body) throw new StageError("E_INGEST_CORRUPT", `The link returned ${r.status}.`);
-    if (Number(r.headers.get("content-length")) > MAX_BYTES) throw new StageError("E_INGEST_TOO_LARGE", "Files are limited to 5 GB.");
+    if (Number(r.headers.get("content-length")) > MAX_BYTES) throw new StageError("E_INGEST_TOO_LARGE", "Files are limited to 15 GB.");
     const path = join(dir, "source.bin");
     let seen = 0;
     const limit = new Transform({
       transform(chunk, _enc, cb) {
         seen += chunk.length;
-        cb(seen > MAX_BYTES ? new StageError("E_INGEST_TOO_LARGE", "Files are limited to 5 GB.") : null, chunk);
+        cb(seen > MAX_BYTES ? new StageError("E_INGEST_TOO_LARGE", "Files are limited to 15 GB.") : null, chunk);
       },
     });
     await pipeline(Readable.fromWeb(r.body as any), limit, createWriteStream(path));

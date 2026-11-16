@@ -125,7 +125,7 @@ export default function ProjectsPage() {
           ) : (
             <>Drag a file here or{' '}
               <button onClick={() => fileRef.current?.click()} disabled={!!busy} className="text-indigo-300 font-semibold hover:underline">choose a file</button>
-              <span className="block text-[11px] mt-1 text-slate-500">mp4, mov, mkv, webm, mp3, wav, m4a, flac · up to 5 GB · up to 4 hours</span>
+              <span className="block text-[11px] mt-1 text-slate-500">mp4, mov, mkv, webm, mp3, wav, m4a, flac · up to 15 GB · up to 6 hours</span>
             </>
           )}
           <input ref={fileRef} type="file" className="hidden" accept=".mp4,.mov,.mkv,.webm,.mp3,.wav,.m4a,.flac,video/*,audio/*" onChange={(e) => onFile(e.target.files?.[0])} />

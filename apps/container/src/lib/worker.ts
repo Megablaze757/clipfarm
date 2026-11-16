@@ -185,3 +185,16 @@ export async function fetchJob<T>(kind: "process" | "render", id: string): Promi
   if (!r.ok) throw new Error(`could not fetch ${kind} job ${id}: ${r.status} ${(await r.text()).slice(0, 200)}`);
   return (await r.json()) as T;
 }
+
+/** URL FFmpeg can read an R2 object from (via the Worker, with HTTP Range seeking). */
+export const r2Url = (key: string) => `${API()}/v1/internal/r2?key=${encodeURIComponent(key)}`;
+
+/**
+ * FFmpeg/ffprobe input options that authenticate to the Worker. Placed before
+ * `-i <r2Url>`, they let FFmpeg stream/seek a stored video instead of
+ * downloading all of it — an export reads only the seconds it cuts.
+ */
+export async function ffAuthArgs(): Promise<string[]> {
+  const { Authorization } = (await AUTH()) as { Authorization: string };
+  return ["-headers", `Authorization: ${Authorization}\r\n`];
+}
