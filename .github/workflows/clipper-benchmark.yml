@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [".github/workflows/clipper-benchmark.yml"]
+    paths: [".github/workflows/clipper-benchmark.yml", ".github/bench/**"]
 
 permissions:
   contents: read
@@ -54,97 +54,19 @@ jobs:
       - name: Make a 10-minute 1080p sample with speech
         run: |
           mkdir -p /tmp/b && cd /tmp/b
-          python3 - <<'PY'
-          import random
-          random.seed(7)
-          subj = ["Most founders", "Nobody", "The best creators", "Every team I know", "My first company", "This one habit", "The algorithm", "Your audience"]
-          verb = ["gets pricing wrong", "never talks about this", "quietly ignores retention", "spends too much on ads", "doubled revenue in a year", "fails without feedback", "rewards the first three seconds", "remembers stories, not facts"]
-          tail = ["and here is why.", "because nobody tested it.", "which sounds crazy, right?", "and it changed everything.", "so we tried something else.", "but the data says otherwise.", "and that is the whole secret.", "until we fixed one thing."]
-          lines = [f"{random.choice(subj)} {random.choice(verb)}, {random.choice(tail)}" for _ in range(420)]
-          open("speech.txt", "w").write(" ".join(lines))
-          PY
+          python3 "$GITHUB_WORKSPACE/.github/bench/make_speech_text.py" > speech.txt
           espeak-ng -s 165 -f speech.txt -w speech.wav
           ffmpeg -hide_banner -loglevel error -y -stream_loop -1 -i speech.wav -t $((SAMPLE_MIN*60)) -ar 48000 -ac 2 speech48.wav
-          # Moving test pattern + film-grain noise: harder to encode than a talking head, so timings are conservative.
-          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=s=1920x1080:r=30,noise=alls=12:allf=t" -i speech48.wav \
-            -t $((SAMPLE_MIN*60)) -c:v libx264 -preset superfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart sample_h264.mp4
-          ffmpeg -hide_banner -loglevel error -y -i sample_h264.mp4 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 3M -c:a libopus sample_vp9.webm
+          # Moving test pattern + light grain: a bit harder to encode than a talking head, so timings lean conservative.
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=s=1920x1080:r=30,noise=alls=6:allf=t" -i speech48.wav \
+            -t $((SAMPLE_MIN*60)) -c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart sample_h264.mp4
+          ffmpeg -hide_banner -loglevel error -y -i sample_h264.mp4 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v 3M -c:a libopus sample_vp9.webm
           ls -la
 
       - name: Time each stage
         env:
           WHISPER_PYTHON: ${{ steps.py.outputs.python-path }}
-        run: |
-          cd /tmp/b
-          t() { local s=$(date +%s.%N); "$@" > /dev/null 2>&1; local rc=$?; local e=$(date +%s.%N); echo "$(echo "$e - $s" | bc)"; return $rc; }
-          r() { printf '%s|%s\n' "$1" "$2" >> results.txt; echo "$1: $2 s"; }
-          : > results.txt
-          r audio_extract "$(t ffmpeg -y -i sample_h264.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le audio.wav)"
-          r copy_h264     "$(t ffmpeg -y -i sample_h264.mp4 -map 0:v:0 -map 0:a:0 -c copy -movflags +faststart mezz_copy.mp4)"
-          ENC="-c:v libx264 -profile:v high -crf 21 -preset veryfast -g 60 -keyint_min 60 -sc_threshold 0 -pix_fmt yuv420p -r 30 -c:a aac -ar 48000 -ac 2 -b:a 160k -movflags +faststart"
-          r encode_vp9_to_h264 "$(t ffmpeg -y -i sample_vp9.webm -map 0:v:0 -map 0:a:0 -vf "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" $ENC mezz_enc.mp4)"
-          r review_proxy  "$(t ffmpeg -y -i mezz_copy.mp4 -vf scale=-2:360 -c:v libx264 -crf 30 -preset ultrafast -g 60 -pix_fmt yuv420p -c:a aac -b:a 64k -ac 1 -movflags +faststart review.mp4)"
-          r loudness      "$(t ffmpeg -i audio.wav -af loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json -f null -)"
-          # 15 previews (a typical 1-hour shortlist), three at a time like the pipeline.
-          s=$(date +%s.%N)
-          for i in $(seq 0 14); do
-            ffmpeg -y -ss $((i*35)) -i mezz_copy.mp4 -t 30 -vf "crop='min(iw,ih*9/16)':ih,scale=360:640,setsar=1" -c:v libx264 -crf 30 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 64k -movflags +faststart p$i.mp4 >/dev/null 2>&1 &
-            [ $(( (i+1) % 3 )) -eq 0 ] && wait
-          done; wait
-          r previews_15x30s "$(echo "$(date +%s.%N) - $s" | bc)"
-          # Whisper on the CPU: 2 minutes of speech per model, scaled up later.
-          ffmpeg -y -i audio.wav -t 120 -c:a flac chunk.flac >/dev/null 2>&1
-          s=$(date +%s.%N); "$WHISPER_PYTHON" -m pip install --quiet "faster-whisper>=1.1,<2"; r whisper_install "$(echo "$(date +%s.%N) - $s" | bc)"
-          for m in base small; do
-            WHISPER_MODEL=$m "$WHISPER_PYTHON" "$GITHUB_WORKSPACE/apps/container/scripts/whisper_local.py" chunk.flac en > /dev/null 2>&1   # warm: model download
-            s=$(date +%s.%N); WHISPER_MODEL=$m "$WHISPER_PYTHON" "$GITHUB_WORKSPACE/apps/container/scripts/whisper_local.py" chunk.flac en > w_$m.json
-            r whisper_${m}_per_120s "$(echo "$(date +%s.%N) - $s" | bc)"
-            echo "$m words: $(python3 -c "import json;print(len(json.load(open('w_$m.json'))['words']))")"
-          done
-          # A real final render through the pipeline's own code: 45 s, 1080x1920, karaoke captions, 2-pass loudnorm.
-          cat > render.js <<'JS'
-          const { renderFinal } = require(process.env.GITHUB_WORKSPACE + "/apps/container/dist/pipeline/render");
-          const words = []; for (let t = 60000; t < 105000; t += 330) words.push({ w: "word", t0: t, t1: t + 280 });
-          renderFinal("/tmp/b/mezz_copy.mp4", {
-            trim: { in_ms: 60000, out_ms: 105000 },
-            crop: { mode: "path", keyframes: [{ t_ms: 0, cx: 0.4 }, { t_ms: 20000, cx: 0.6 }] },
-            scale: { w: 1080, h: 1920 },
-            captions: { mode: "burn", style_id: "karaoke_yellow", words },
-            overlays: [{ type: "title", text: "Benchmark", t_ms: [0, 2500] }],
-            watermark: true, audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },
-            encode: { crf: 20, preset: "medium", fps: 30 },
-          }, "/tmp/b", "/tmp/b/final.mp4").then(() => console.log("ok"), (e) => { console.error(e); process.exit(1); });
-          JS
-          r final_render_45s "$(t node render.js)"
-          ls -la final.mp4 && cat results.txt
+        run: bash "$GITHUB_WORKSPACE/.github/bench/time_stages.sh"
 
       - name: Extrapolate to a 5-hour stream
-        run: |
-          cd /tmp/b
-          python3 - <<'PY'
-          import os
-          sample, target = int(os.environ["SAMPLE_MIN"]), int(os.environ["TARGET_MIN"])
-          r = {k: float(v) for k, v in (l.strip().split("|") for l in open("results.txt") if "|" in l)}
-          k = target / sample                       # stages that scale with source length
-          w = target * 60 / 120                     # whisper was timed on 120 s
-          fixed_setup = 75                          # checkout, cached tools, npm ci + build (measured in clipper-job)
-          groq_per_chunk, chunks = 12, target / 10  # ~10-15 s per 10-min chunk when within the free allowance
-          common = r["audio_extract"] * k + r["loudness"] * k + r["review_proxy"] * k + r["previews_15x30s"] * (target / 60)
-          def total(mezz, asr):  # mezzanine runs alongside ASR in the pipeline
-              return fixed_setup + r["audio_extract"] * k + max(mezz, asr) + r["loudness"] * k + r["review_proxy"] * k + r["previews_15x30s"] * (target / 60) + 60
-          rows = [
-            ("H.264 upload, Groq (no limit hit)", r["copy_h264"] * k, groq_per_chunk * chunks),
-            ("H.264 upload, all built-in Whisper base", r["copy_h264"] * k, r["whisper_base_per_120s"] * w + r["whisper_install"]),
-            ("VP9/other upload, all Whisper base", r["encode_vp9_to_h264"] * k, r["whisper_base_per_120s"] * w + r["whisper_install"]),
-            ("VP9/other upload, all Whisper small", r["encode_vp9_to_h264"] * k, r["whisper_small_per_120s"] * w + r["whisper_install"]),
-          ]
-          lines = [f"Per {sample}-min sample: " + ", ".join(f"{a}={b:.1f}s" for a, b in r.items())]
-          for name, mezz, asr in rows:
-              mins = total(mezz, asr) / 60
-              lines.append(f"5-hour stream, {name}: ~{mins:.0f} min ({'fits' if mins < 330 else 'EXCEEDS'} the 330-min job limit)")
-          lines.append(f"Final 45s vertical export with captions: {r['final_render_45s']:.0f}s")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-              f.write("## Clipper benchmark\n\n" + "\n".join(f"- {l}" for l in lines) + "\n")
-          for l in lines:
-              print(f"::notice title=Clipper benchmark::{l}")
-          PY
+        run: python3 "$GITHUB_WORKSPACE/.github/bench/extrapolate.py" /tmp/b/results.txt
