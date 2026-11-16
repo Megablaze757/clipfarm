@@ -1,6 +1,7 @@
 import type { Candidate, Word } from "../lib/types";
 import { llm, parseJsonObject } from "../lib/worker";
 import { composite } from "./scoring";
+import { MIN_CLIP_MS } from "./boundaries";
 import { textOf } from "./text";
 
 /**
@@ -109,7 +110,7 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         const cutStart = Math.max(0, Math.min(Math.floor(len * 0.4), Math.round(Number(j.trim_start_words) || 0)));
         const cutEnd = Math.max(0, Math.min(Math.floor(len * 0.25), Math.round(Number(j.trim_end_words) || 0)));
         const i0 = c.i0 + cutStart, i1 = c.i1 - cutEnd;
-        if ((cutStart || cutEnd) && i1 > i0 && words[i1].t1 - words[i0].t0 >= 10_000) {
+        if ((cutStart || cutEnd) && i1 > i0 && words[i1].t1 - words[i0].t0 >= MIN_CLIP_MS) {
           c.i0 = i0; c.i1 = i1;
           c.t_in_ms = words[i0].t0; c.t_out_ms = words[i1].t1;
           c.text = textOf(words, i0, i1);

@@ -68,7 +68,7 @@ test("MMR never selects two candidates overlapping ≥70%", () => {
   assert.ok(picked.every((c) => c.score >= 0 && c.score <= 100));
 });
 
-test("snapped boundaries never cut inside a word and respect 8–180 s", () => {
+test("snapped boundaries never cut inside a word and respect 15–180 s", () => {
   const ws = generateWindows(W, sentences(W), "auto", 500);
   const snapped = snapBoundaries(selectMMR(ws.map((w) => heuristicScore(W, ENV, w, 3)), 8), W, ENV);
   for (const c of snapped) {
@@ -76,7 +76,7 @@ test("snapped boundaries never cut inside a word and respect 8–180 s", () => {
       assert.ok(!(c.t_in_ms > w.t0 && c.t_in_ms < w.t1), "in-point inside a word");
       assert.ok(!(c.t_out_ms > w.t0 && c.t_out_ms < w.t1), "out-point inside a word");
     }
-    assert.ok(c.t_out_ms - c.t_in_ms >= 8000 && c.t_out_ms - c.t_in_ms <= 180000);
+    assert.ok(c.t_out_ms - c.t_in_ms >= 15000 && c.t_out_ms - c.t_in_ms <= 180000);
   }
 });
 
@@ -225,4 +225,26 @@ test("link download errors get a clear, honest message", () => {
   assert.equal(classifyYtDlpError("ERROR: [youtube] x: Private video. Sign in if you've been granted access").code, "E_SOURCE_PRIVATE");
   assert.equal(classifyYtDlpError("ERROR: The uploader has not made this video available in your country").code, "E_SOURCE_GEO_BLOCKED");
   assert.equal(classifyYtDlpError("ERROR: Video unavailable").code, "E_SOURCE_PRIVATE");
+});
+
+test("clips never open on But / So / Um / I mean", () => {
+  const { skipOpeners, snapBoundaries } = require("../dist/pipeline/boundaries");
+  const ws = words("But look, I mean the real reason we failed was pricing. We charged too little for years and never noticed. Then a customer told us straight. Everything changed after that call. It was the best feedback we ever got.");
+  assert.equal(ws[skipOpeners(ws, 0, ws.length - 1)].w, "the");
+  const env = new Float32Array(400).fill(0.3);
+  const [c] = snapBoundaries([{ i0: 0, i1: ws.length - 1, t_in_ms: ws[0].t0, t_out_ms: ws[ws.length - 1].t1, text: "", subscores: {}, score: 50, features: { badges: [], signals: [] }, rationale: "" }], ws, env);
+  assert.notEqual(ws[c.i0].w.toLowerCase().replace(/[^a-z]/g, ""), "but");
+  assert.ok(!["but", "look", "i", "so", "um"].includes(ws[c.i0].w.toLowerCase().replace(/[^a-z]/g, "")));
+});
+
+test("short moments are extended by whole sentences to at least 15 s", () => {
+  const { extendToMin, MIN_CLIP_MS } = require("../dist/pipeline/boundaries");
+  const s = sentences(W);
+  // One sentence (~4 s) — too short on its own.
+  const [i0, i1] = extendToMin(W, s[3].i0, s[3].i1);
+  const dur = W[i1].t1 - W[i0].t0;
+  assert.ok(dur >= MIN_CLIP_MS, `${dur} ms`);
+  assert.ok(dur <= 35000);
+  assert.ok(/[.?!]$/.test(W[i1].w), "ends on a sentence end");
+  assert.ok(i0 === 0 || /[.?!]$/.test(W[i0 - 1].w), "starts on a sentence start");
 });
