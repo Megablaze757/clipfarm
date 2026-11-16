@@ -55,7 +55,7 @@ inside the free tier).
    `SUPABASE_ACCESS_TOKEN`, paste `supabase/clipper-setup.sql` into Supabase's SQL
    editor once instead.
    *Pasting `apex-api-merged.worker.js` into the dashboard also works*: then add an R2
-   binding `R2_BUCKET` → `clipper-prod`, the `nodejs_compat` flag, the vars
+   binding `R2_BUCKET` → `clipper-prod`, the vars
    `CLIPPER_API_URL`/`CLIPPER_APP_URL`, and a `*/10 * * * *` cron trigger by hand.
 3. GitHub Pages rebuilds the web app on every push to `main`.
 

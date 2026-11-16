@@ -9,7 +9,6 @@
 name = "apex-api"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
-compatibility_flags = ["nodejs_compat"]
 
 # Variables set in the Cloudflare dashboard but not listed here survive a
 # deploy. PocketAthlete was configured by hand in the dashboard, so this matters.
