@@ -377,12 +377,14 @@ function Studio() {
                 {exporting ? 'Starting…' : 'Export MP4'}
               </button>
             </div>
+            <p className="text-[11px] text-slate-500">Exported MP4s are deleted 24 hours after they finish. Download them straight away.</p>
             {data.plan.watermark && <p className="text-[11px] text-slate-500">Free plan exports carry a small watermark. <Link href="/settings/billing" className="text-indigo-300 underline">Upgrade</Link> to remove it.</p>}
             <ul className="space-y-2">
               {renders.map((r) => (
                 <li key={r.id} className="flex items-center justify-between text-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
                   <span className="text-slate-300">{r.preset}</span>
                   {r.status === 'completed' && r.download_url ? <a href={r.download_url} className="text-emerald-300 font-semibold underline">Download</a>
+                    : r.status === 'expired' ? <span className="text-slate-500">Deleted after 24 h — export again</span>
                     : r.status === 'failed' ? <span className="text-rose-300">Failed ({r.error_code})</span>
                     : <span className="text-slate-400 animate-pulse">Rendering…</span>}
                 </li>

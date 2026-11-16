@@ -51,6 +51,11 @@ export async function r2Download(key: string, dest: string): Promise<void> {
   });
 }
 
+export async function r2Delete(key: string): Promise<void> {
+  const r = await fetch(`${API()}/v1/internal/r2?key=${encodeURIComponent(key)}`, { method: "DELETE", headers: await AUTH() });
+  if (!r.ok) throw new Error(`delete ${key}: ${r.status}`);
+}
+
 export async function r2Upload(key: string, path: string, contentType: string): Promise<void> {
   const size = (await stat(path)).size;
   const fh = await open(path, "r");

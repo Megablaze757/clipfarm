@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { probe, StageError } from "./lib/proc";
-import { db as supabase, notifyNext, r2Download, r2Upload } from "./lib/worker";
+import { db as supabase, notifyNext, r2Delete, r2Download, r2Upload } from "./lib/worker";
 import type { Candidate } from "./lib/types";
 import { fetchSource } from "./pipeline/ingest";
 import { analyzeLoudness, energyEnvelope, extractAudio, makeMezzanine, poster, reviewProxy } from "./pipeline/transcode";
@@ -156,6 +156,10 @@ export async function processProject(job: ProcessJob): Promise<void> {
       model_versions: { asr: "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
     });
     stage("ready");
+    // The upload has done its job (the mezzanine replaces it): delete it now
+    // rather than keeping a full-size copy for 7 days. Failed projects keep
+    // theirs so Retry still works.
+    if (job.source.kind === "upload") await r2Delete(job.source.r2_key).catch((e) => console.warn(`could not delete source: ${(e as Error).message}`));
   } catch (e) {
     const err = e instanceof StageError ? e : null;
     const detail = String((e as Error)?.message ?? e).slice(-1000);
