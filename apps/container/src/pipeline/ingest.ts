@@ -46,29 +46,7 @@ export async function fetchSource(source: { kind: "upload"; r2_key: string } | {
   await assertPublic(url);
 
   if (SITE_RE.test(url.hostname) || /\.m3u8($|\?)/i.test(url.pathname)) {
-    try {
-      const { stdout } = await run("yt-dlp", [
-        "--no-playlist", "--no-progress", "--restrict-filenames",
-        // H.264 + AAC first: the working copy can then be a stream copy (seconds)
-        // instead of a re-encode (up to real time). Falls back to anything ≤1080p.
-        "-f", "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=1080]/bv*[height<=1080]+ba/b[height<=1080]/b",
-        "--merge-output-format", "mp4",
-        "--max-filesize", "15G",
-        "--print", "title", "--no-simulate",
-        "-o", join(dir, "source.%(ext)s"),
-        url.toString(),
-      ], { timeoutMs: 45 * 60 * 1000 });
-      const file = (await readdir(dir)).find((f) => f.startsWith("source.") && !f.endsWith(".part"));
-      if (!file) throw new Error("yt-dlp produced no file");
-      return { path: join(dir, file), title: stdout.trim().split("\n")[0]?.slice(0, 200) || undefined };
-    } catch (e) {
-      const msg = String((e as Error).message);
-      if (/private|members-only|sign in|login required/i.test(msg)) throw new StageError("E_SOURCE_PRIVATE", "That video is private or needs a login. Download it and upload the file instead.");
-      if (/not available in your country|geo/i.test(msg)) throw new StageError("E_SOURCE_GEO_BLOCKED", "That video is blocked in this region. Upload the file instead.");
-      if (/confirm you.?re not a bot|429|too many requests/i.test(msg)) throw new StageError("E_SOURCE_PRIVATE", "The site blocked the download. Upload the file instead.", true);
-      if (/drm/i.test(msg)) throw new StageError("E_SOURCE_DRM", "That video is DRM-protected.");
-      throw new StageError("E_INGEST_CORRUPT", `Couldn't download that link: ${msg.slice(0, 200)}`);
-    }
+    return downloadWithYtDlp(url, dir);
   }
 
   // Direct file link: follow redirects by hand so every hop is re-checked.
@@ -96,4 +74,53 @@ export async function fetchSource(source: { kind: "upload"; r2_key: string } | {
     return { path };
   }
   throw new StageError("E_INGEST_CORRUPT", "Too many redirects.");
+}
+
+/**
+ * YouTube often refuses downloads from data-centre IPs (GitHub's runners,
+ * Cloudflare) with "Sign in to confirm you're not a bot". We make one normal
+ * attempt and, if YouTube says no, tell the user plainly to upload the file —
+ * we don't try to get around YouTube's bot detection.
+ */
+export function classifyYtDlpError(msg: string): StageError {
+  if (/confirm you.?re not a bot|sign in to confirm|429|too many requests|HTTP Error 403|po.?token/i.test(msg)) {
+    return new StageError("E_SOURCE_BLOCKED",
+      "YouTube didn't allow the download from our servers. Download the video yourself and upload the file instead.");
+  }
+  if (/private video|members-only|join this channel|login required|age.?restricted|confirm your age/i.test(msg)) {
+    return new StageError("E_SOURCE_PRIVATE", "That video is private, members-only or age-restricted. Download it and upload the file instead.");
+  }
+  if (/available in your country|geo.?restrict|blocked it in your country/i.test(msg)) {
+    return new StageError("E_SOURCE_GEO_BLOCKED", "That video is blocked in this region. Upload the file instead.");
+  }
+  if (/drm/i.test(msg)) return new StageError("E_SOURCE_DRM", "That video is DRM-protected.");
+  if (/video unavailable|has been removed|does not exist/i.test(msg)) {
+    return new StageError("E_SOURCE_PRIVATE", "That video is unavailable (removed or the link is wrong).");
+  }
+  return new StageError("E_INGEST_CORRUPT", `Couldn't download that link: ${msg.slice(-300)}`);
+}
+
+async function downloadWithYtDlp(url: URL, dir: string): Promise<{ path: string; title?: string }> {
+  const bin = process.env.YTDLP_BIN || "yt-dlp";
+  const common = [
+    "--no-playlist", "--no-progress", "--restrict-filenames",
+    // H.264 + AAC first: browsers play it as-is, so no working copy is needed.
+    "-f", "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=1080]/bv*[height<=1080]+ba/b[height<=1080]/b",
+    "--merge-output-format", "mp4",
+    "--max-filesize", "15G",
+    "--concurrent-fragments", "8",
+    "--retries", "3",
+    "--print", "title", "--no-simulate",
+    "-o", join(dir, "source.%(ext)s"),
+  ];
+  try {
+    const { stdout } = await run(bin, [...common, url.toString()], { timeoutMs: 45 * 60 * 1000 });
+    const file = (await readdir(dir)).find((f) => f.startsWith("source.") && !f.endsWith(".part"));
+    if (!file) throw new Error("yt-dlp produced no file");
+    return { path: join(dir, file), title: stdout.trim().split("\n")[0]?.slice(0, 200) || undefined };
+  } catch (e) {
+    const msg = String((e as Error).message);
+    console.warn(`yt-dlp failed: ${msg.slice(-400)}`);
+    throw classifyYtDlpError(msg);
+  }
 }

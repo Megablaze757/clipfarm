@@ -216,3 +216,13 @@ test("judge re-asks for skipped clips, and unreviewed clips rank below reviewed 
     for (const u of unreviewed) assert.ok(Math.abs(u.score - Math.round(require("../dist/pipeline/scoring").composite(u.subscores) * 0.85 * 100) / 100) < 0.01);
   } finally { worker.llm = real; }
 });
+
+test("link download errors get a clear, honest message", () => {
+  const { classifyYtDlpError } = require("../dist/pipeline/ingest");
+  const blocked = classifyYtDlpError("ERROR: [youtube] x: Sign in to confirm you’re not a bot");
+  assert.equal(blocked.code, "E_SOURCE_BLOCKED");
+  assert.match(blocked.message, /upload the file/);
+  assert.equal(classifyYtDlpError("ERROR: [youtube] x: Private video. Sign in if you've been granted access").code, "E_SOURCE_PRIVATE");
+  assert.equal(classifyYtDlpError("ERROR: The uploader has not made this video available in your country").code, "E_SOURCE_GEO_BLOCKED");
+  assert.equal(classifyYtDlpError("ERROR: Video unavailable").code, "E_SOURCE_PRIVATE");
+});
