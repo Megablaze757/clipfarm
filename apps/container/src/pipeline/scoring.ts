@@ -223,7 +223,7 @@ export function selectMMR(cands: Candidate[], n: number, lambda = 0.35): Candida
     if (best < 0) break;
     const [chosen] = pool.splice(best, 1);
     chosen.c.subscores.novelty = clamp01(1 - bestSim);
-    chosen.c.score = composite(chosen.c.subscores);
+    chosen.c.score = Math.round(composite(chosen.c.subscores) * (chosen.c.features.score_factor ?? 1) * 100) / 100;
     picked.push(chosen);
   }
   return picked.map((p) => p.c).sort((a, b) => b.score - a.score);

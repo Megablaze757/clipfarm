@@ -65,6 +65,8 @@ export interface Candidate {
     hook_line?: string;
     /** Found by the whole-transcript nomination pass (moments.ts). */
     nominated?: boolean;
+    /** Multiplier on the composite (e.g. 0.85 = not reviewed by the AI judge). */
+    score_factor?: number;
     /** Laughter/applause-like events inside or right after the clip. */
     reactions?: number;
   };

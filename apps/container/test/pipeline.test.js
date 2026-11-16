@@ -188,3 +188,31 @@ test("judge blends 0-10 scores and trims a slow lead-in", async () => {
     assert.equal(c.features.title, "Founders get pricing wrong");
   } finally { worker.llm = real; }
 });
+
+test("judge re-asks for skipped clips, and unreviewed clips rank below reviewed ones", async () => {
+  const worker = require("../dist/lib/worker");
+  const { refineWithLLM } = require("../dist/pipeline/llm-scoring");
+  const { heuristicScore, selectMMR } = require("../dist/pipeline/scoring");
+  const ws = generateWindows(W, sentences(W), "auto", 500);
+  const cands = ws.filter((_, i) => i % 7 === 0).slice(0, 14).map((w) => heuristicScore(W, ENV, w, 3, []));
+  let calls = 0;
+  const real = worker.llm;
+  // First call judges only id 0 (like the live run); later calls judge everything they get except one.
+  worker.llm = async (_s, user) => {
+    calls++;
+    const ids = [...user.matchAll(/### id (\d+)/g)].map((m) => Number(m[1]));
+    const judged = calls === 1 ? [0] : ids.slice(1);
+    return { model: "stub", text: JSON.stringify({ clips: judged.map((id) => ({ id, hook: 3, payoff: 3, emotion: 3, shareability: 3, self_contained: 5, complete: 5, title: "t", rationale: "r" })) }) };
+  };
+  try {
+    await refineWithLLM(cands, W);
+    assert.ok(calls >= 3, "skipped clips were asked again");
+    const reviewed = cands.filter((c) => c.features.scorer === "llm");
+    const unreviewed = cands.filter((c) => c.features.scorer !== "llm");
+    assert.ok(reviewed.length > 1 && unreviewed.length >= 1);
+    for (const u of unreviewed) assert.equal(u.features.score_factor, 0.85);
+    selectMMR(cands, cands.length);
+    // The penalty survives MMR's re-scoring.
+    for (const u of unreviewed) assert.ok(Math.abs(u.score - Math.round(require("../dist/pipeline/scoring").composite(u.subscores) * 0.85 * 100) / 100) < 0.01);
+  } finally { worker.llm = real; }
+});

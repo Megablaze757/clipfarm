@@ -46,15 +46,41 @@ const n01 = (v: unknown) => {
   return Math.max(0, Math.min(1, n > 10 ? n / 100 : n > 1 ? n / 10 : n));
 };
 
+/** Score multiplier for clips the AI never reviewed, once others have been. */
+export const UNREVIEWED_PENALTY = 0.85;
+
 export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize = 12): Promise<{ refined: number; model: string | null }> {
   let refined = 0;
   let model: string | null = null;
-  const batches: Candidate[][] = [];
-  for (let b = 0; b < cands.length; b += batchSize) batches.push(cands.slice(b, b + batchSize));
 
-  // Three batches at a time.
-  for (let b = 0; b < batches.length; b += 3) {
-    await Promise.all(batches.slice(b, b + 3).map(async (batch) => {
+  const runBatches = async (pool: Candidate[], size: number) => {
+    const batches: Candidate[][] = [];
+    for (let b = 0; b < pool.length; b += size) batches.push(pool.slice(b, b + size));
+    for (let b = 0; b < batches.length; b += 3) {
+      await Promise.all(batches.slice(b, b + 3).map(judge));
+    }
+  };
+
+  // Pass A: batches of 12, three at a time.
+  // Pass B: models sometimes return only part of a batch (seen live: 3 of 12),
+  // so anything skipped is asked again in smaller batches of 6.
+  await runBatches(cands, batchSize);
+  const skipped = cands.filter((c) => c.features.scorer !== "llm");
+  if (skipped.length && refined > 0) await runBatches(skipped, 6);
+
+  // The judge is deliberately harsh (anchors: most moments score 3-6), so an
+  // unreviewed clip's optimistic heuristic score must not outrank reviewed ones.
+  if (refined > 0) {
+    for (const c of cands) {
+      if (c.features.scorer === "llm") continue;
+      c.features.score_factor = UNREVIEWED_PENALTY;
+      c.score = Math.round(composite(c.subscores) * UNREVIEWED_PENALTY * 100) / 100;
+      c.features.signals.push("not AI-reviewed");
+    }
+  }
+  return { refined, model };
+
+  async function judge(batch: Candidate[]): Promise<void> {
       const user = batch.map((c, k) => {
         const secs = Math.round((c.t_out_ms - c.t_in_ms) / 1000);
         const hint = c.features.nominated ? ` (editor flagged: ${c.features.category ?? "moment"})` : "";
@@ -99,7 +125,5 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         c.score = composite(s);
         refined++;
       }
-    }));
   }
-  return { refined, model };
 }
