@@ -1,22 +1,117 @@
-import { Candidate } from './candidates'
-import { exec } from 'child_process'
-import { promisify } from 'util'
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { ffmpeg, probe } from "../lib/proc";
+import { buildAss, type CapWord } from "./captions";
 
-const execAsync = promisify(exec)
+/** Grid proxy (§7.1): 9:16 centre crop, 360×640, CRF 30 — ~15 % of a final's cost. */
+export async function renderProxy(mezzanine: string, inMs: number, outMs: number, out: string): Promise<void> {
+  await ffmpeg(["-ss", (inMs / 1000).toFixed(3), "-i", mezzanine, "-t", ((outMs - inMs) / 1000).toFixed(3),
+    "-vf", "crop='min(iw,ih*9/16)':ih,scale=360:640,setsar=1",
+    "-c:v", "libx264", "-crf", "30", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", out], 10 * 60 * 1000);
+}
 
-export async function renderProxies(mezzaninePath: string, cand: Candidate, projectId: string): Promise<string> {
-  const proxyFilename = `/tmp/proxy_${projectId}_${cand.t_in_ms}.mp4`  
-  const inSec = (cand.t_in_ms / 1000).toFixed(2)
-  const outSec = (cand.t_out_ms / 1000).toFixed(2)
-  const durationSec = ((cand.t_out_ms - cand.t_in_ms) / 1000).toFixed(2)
+export interface RenderSpec {
+  trim: { in_ms: number; out_ms: number };
+  crop: { mode: "center" | "path" | "fit"; keyframes: { t_ms: number; cx: number }[] };
+  scale: { w: number; h: number };
+  captions: { mode: "burn" | "none"; style_id: string; words: { w: string; t0: number; t1: number }[] };
+  overlays: { type: "title"; text: string; t_ms: [number, number] }[];
+  watermark: boolean;
+  audio: { loudnorm: { target_lufs: number; tp: number } };
+  encode: { crf: number; preset: string; fps: number };
+}
 
-  const command = `ffmpeg -y -ss ${inSec} -t ${durationSec} -i "${mezzaninePath}" -vf "crop=ih*9/16:ih,scale=360:640" -c:v libx264 -crf 30 -preset ultrafast -c:a aac "${proxyFilename}"`
-  
-  try {
-    await execAsync(command)
-  } catch (e) {
-    console.warn(`[Proxy Render FFmpeg execution notice]`)  
+const FONT = "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf";
+const dt = (s: string) => s.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\u2019").replace(/%/g, "\\%");
+
+/**
+ * Smoothed crop centre as an FFmpeg expression of t (§6.6 step 5). Keyframes
+ * come from the editor's MediaPipe pass (or manual pans), already smoothed;
+ * here we only interpolate linearly between them and clamp to the frame.
+ */
+export function cropXExpr(keys: { t_ms: number; cx: number }[], srcW: number, cropW: number): string {
+  const ks = [...keys].filter((k) => Number.isFinite(k.t_ms) && Number.isFinite(k.cx)).sort((a, b) => a.t_ms - b.t_ms);
+  const px = (cx: number) => Math.max(0, Math.min(srcW - cropW, cx * srcW - cropW / 2)).toFixed(1);
+  if (!ks.length) return px(0.5);
+  if (ks.length === 1) return px(ks[0].cx);
+  let expr = px(ks[ks.length - 1].cx);
+  for (let i = ks.length - 2; i >= 0; i--) {
+    const a = ks[i], b = ks[i + 1];
+    const t0 = (a.t_ms / 1000).toFixed(3), t1 = (b.t_ms / 1000).toFixed(3);
+    const span = Math.max(0.001, (b.t_ms - a.t_ms) / 1000);
+    const seg = `${px(a.cx)}+(${px(b.cx)}-${px(a.cx)})*(t-${t0})/${span.toFixed(3)}`;
+    expr = `if(lt(t\\,${t1})\\,${seg}\\,${expr})`;
   }
+  return `if(lt(t\\,${(ks[0].t_ms / 1000).toFixed(3)})\\,${px(ks[0].cx)}\\,${expr})`;
+}
 
-  return `r2://clipper-prod/tenant_1/projects/${projectId}/proxies/${cand.t_in_ms}.mp4`
+export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: string, out: string): Promise<{ durationMs: number }> {
+  const info = await probe(mezzanine);
+  const { w, h } = spec.scale;
+  const durS = (spec.trim.out_ms - spec.trim.in_ms) / 1000;
+  const ss = (spec.trim.in_ms / 1000).toFixed(3);
+
+  // --- video graph ---
+  const target = w / h;
+  const filters: string[] = [];
+  let v = "[0:v]";
+  if (spec.crop.mode === "fit") {
+    // Letterbox onto a blurred, zoomed copy of itself (§6.6 fallback ladder).
+    filters.push(`${v}split=2[bgsrc][fgsrc]`);
+    filters.push(`[bgsrc]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},boxblur=20:2,eq=brightness=-0.08[bg]`);
+    filters.push(`[fgsrc]scale=${w}:${h}:force_original_aspect_ratio=decrease[fg]`);
+    filters.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v0]`);
+  } else {
+    const cropW = Math.floor(Math.min(info.width, info.height * target) / 2) * 2;
+    const cropH = Math.floor(Math.min(info.height, cropW / target) / 2) * 2;
+    const x = spec.crop.mode === "path" ? cropXExpr(spec.crop.keyframes, info.width, cropW) : String(Math.floor((info.width - cropW) / 2));
+    filters.push(`${v}crop=${cropW}:${cropH}:${x}:${Math.floor((info.height - cropH) / 2)},scale=${w}:${h}:flags=lanczos,setsar=1[v0]`);
+  }
+  v = "[v0]";
+  let n = 1;
+  if (spec.captions.mode === "burn" && spec.captions.words.length) {
+    const rel: CapWord[] = spec.captions.words
+      .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
+      .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
+    const assPath = join(dir, "captions.ass");
+    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h));
+    filters.push(`${v}subtitles=filename='${assPath}':fontsdir=/usr/share/fonts[v${n}]`);
+    v = `[v${n++}]`;
+  }
+  for (const o of spec.overlays ?? []) {
+    if (o.type !== "title" || !o.text) continue;
+    const [a, b] = o.t_ms;
+    filters.push(`${v}drawtext=fontfile=${FONT}:text='${dt(o.text)}':fontsize=${Math.round(w * 0.058)}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=${Math.round(w * 0.02)}:x=(w-text_w)/2:y=h*0.12:enable='between(t,${a / 1000},${b / 1000})'[v${n}]`);
+    v = `[v${n++}]`;
+  }
+  if (spec.watermark) {
+    // FR-11.6 — applied whenever the Worker says so; the client can't turn it off.
+    filters.push(`${v}drawtext=fontfile=${FONT}:text='Made with Clipper':fontsize=${Math.round(w * 0.03)}:fontcolor=white@0.75:shadowcolor=black@0.6:shadowx=2:shadowy=2:x=w-text_w-${Math.round(w * 0.04)}:y=${Math.round(h * 0.04)}[v${n}]`);
+    v = `[v${n++}]`;
+  }
+  filters.push(`${v}fps=${spec.encode.fps},format=yuv420p[vout]`);
+
+  // --- audio: two-pass loudnorm to −14 LUFS (FR-11.2) ---
+  const { target_lufs: I, tp: TP } = spec.audio.loudnorm;
+  let af = `loudnorm=I=${I}:TP=${TP}:LRA=11`;
+  try {
+    const { stderr } = await ffmpeg(["-ss", ss, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${af}:print_format=json`, "-f", "null", "-"]);
+    const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
+    if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
+      af += `:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
+    }
+  } catch { /* single-pass fallback */ }
+  af += ",aresample=48000";
+
+  await ffmpeg([
+    "-ss", ss, "-i", mezzanine, "-t", durS.toFixed(3),
+    "-filter_complex", filters.join(";"),
+    "-map", "[vout]", "-map", "0:a:0?", "-af", af,
+    "-c:v", "libx264", "-crf", String(spec.encode.crf), "-preset", spec.encode.preset, "-profile:v", "high",
+    "-g", String(spec.encode.fps * 2), "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+    "-movflags", "+faststart", out,
+  ], 20 * 60 * 1000);
+  return { durationMs: Math.round(durS * 1000) };
 }

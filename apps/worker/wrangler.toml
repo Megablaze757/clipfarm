@@ -1,16 +1,81 @@
-name = "clipper-worker"
-main = "src/index.js"
-compatibility_date = "2024-08-01"
+# =============================================================================
+# apex-api — ONE Worker for PocketAthlete AND Clipper.
+#
+# Deploy from here with `npx wrangler deploy` (not the dashboard paste — the
+# Container and R2 bindings below can only be created by wrangler).
+#
+# Both apps share the AI keys and the Groq -> OpenRouter -> NVIDIA ladder.
+# =============================================================================
+name = "apex-api"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Variables set in the Cloudflare dashboard but not listed here survive a
+# deploy. PocketAthlete was configured by hand in the dashboard, so this matters.
+keep_vars = true
+
+[triggers]
+# 08:00 + 19:00 UTC: PocketAthlete reminders (unchanged).
+# */10:            Clipper — dispatch queued jobs, fail dead ones, report usage.
+#                  Must match CLIPPER_CRON in src/clipper/cron.ts.
+crons = ["0 8 * * *", "0 19 * * *", "*/10 * * * *"]
 
 [vars]
-SUPABASE_URL = "https://ntmcnglooqwbdebhpopp.supabase.co"
-SUPABASE_ANON_KEY = "sb_publishable_lBBlyXpsUqmHrcIgXYUDCg_iJUJ7E51"
-SUPABASE_SERVICE_ROLE_KEY = "SUPABASE_SERVICE_ROLE_KEY_PLACEHOLDER"
-SUPABASE_JWKS_URL = "https://ntmcnglooqwbdebhpopp.supabase.co/auth/v1/.well-known/jwks.json"
+# --- PocketAthlete (copied from FOOTBALLFITNESSGURU/cloudflare/wrangler.toml) ---
+OPENROUTER_FREE_MODELS = "nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-20b:free,google/gemma-4-31b-it:free"
+OPENROUTER_MODEL = "deepseek/deepseek-chat"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODELS = "openai/gpt-oss-120b"
+NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"
+NVIDIA_FALLBACK_MODELS = "nvidia/llama-3.3-nemotron-super-49b-v1"
+OPENROUTER_VISION_MODELS = "google/gemini-2.5-flash,openai/gpt-4.1-mini"
+AI_DAILY_LIMIT = "40"
+TRIAL_DAYS = "14"
+PAID_PROMPT_PER_M = "0.2002"
+PAID_COMPLETION_PER_M = "0.8001"
+SUPABASE_URL = "https://txqhstackgidjqkkrzyj.supabase.co"
+APP_URL = "https://pocketathlete.com"
+REMINDER_FROM = "PocketAthlete <info@pocketathlete.com>"
+STRIPE_PRICE_SILVER = "price_1TvCAyG0ICmhMX6mAvegjzCb"
+STRIPE_PRICE_GOLD = "price_1TvCBcG0ICmhMX6mLuUwY3Qe"
 
-[containers]
-FFMPEG_CONTAINER = "FFmpegContainer"
+# --- Clipper ---
+# Shares PocketAthlete's Supabase project (SUPABASE_URL above) and keys; its
+# tables are prefixed clip_ so nothing collides. No Clipper Supabase settings.
+CLIPPER_APP_URL = "https://megablaze757.github.io/clipfarm"
+# This Worker's own public URL — the Container calls back to it.
+CLIPPER_API_URL = "https://apex-api.fitnessguru.workers.dev"
+# Stripe price ids for Clipper plans (price_...). Leave blank until created.
+CLIPPER_PRICE_CREATOR = ""
+CLIPPER_PRICE_TEAM = ""
+CLIPPER_PRICE_AGENCY = ""
+CLIPPER_PRICE_METERED = ""
+CLIPPER_METER_EVENT = "clipper_source_minutes"
+
+# Secrets — `npx wrangler secret put NAME`. Existing PocketAthlete secrets stay:
+#   GROQ_SECRET, OPENROUTER_API_KEY, NVIDIA_SECRET   (shared by both apps)
+#   SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY,
+#   STRIPE_WEBHOOK_SECRET, GAS_EMAIL_URL, GAS_EMAIL_SECRET, RESEND_API_KEY, ...
+# Clipper needs NO new secrets to run. Optional, later:
+#   CLIPPER_STRIPE_WEBHOOK_SECRET   whsec_... once Clipper's paid plans exist
+#   CLIPPER_STRIPE_SECRET_KEY       defaults to STRIPE_SECRET_KEY
+#   CLIPPER_INTERNAL_SECRET         defaults to SUPABASE_SERVICE_ROLE_KEY
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "clipper-prod"
+
+[[containers]]
+class_name = "FFmpegContainer"
+image = "../container/Dockerfile"
+max_instances = 20
+instance_type = "standard-2"
+
+[[durable_objects.bindings]]
+name = "FFMPEG"
+class_name = "FFmpegContainer"
+
+[[migrations]]
+tag = "clipper-v1"
+new_sqlite_classes = ["FFmpegContainer"]

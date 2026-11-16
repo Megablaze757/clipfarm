@@ -6,8 +6,9 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces"
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run typecheck --workspace=apps/worker && npm test --workspace=apps/container",
+    "sync-pocketathlete": "node scripts/sync-pocketathlete.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

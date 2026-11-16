@@ -1,144 +1,167 @@
-import React from 'react'
+'use client'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { StageRail } from '@/components/stage-rail'
+import { ErrorBox, Loading, useRequireSession } from '@/components/use-session'
+import { api, ApiError, type Project } from '@/lib/api'
+import { uploadFile } from '@/lib/upload'
+import { supabase } from '@/lib/supabase'
+import { formatDuration, timeAgo } from '@/lib/tokens'
+
+const DURATIONS = [
+  { label: 'Auto', value: 'auto' },
+  { label: '~15s', value: '15' },
+  { label: '~30s', value: '30' },
+  { label: '~60s', value: '60' },
+  { label: '~90s', value: '90' },
+]
 
 export default function ProjectsPage() {
-  const projects = [
-    {
-      id: 'proj_1',
-      title: 'AI Engineering Podcast #42 — Building Video Pipelines',
-      source_kind: 'YouTube',
-      duration: '1h 14m',
-      clipsCount: 12,
-      status: 'ready',
-      updatedAt: '2 hours ago',
-      topScore: 94.2,
-    },
-    {
-      id: 'proj_2',
-      title: 'Founder Interview — Scaling Cloudflare Containers & R2',
-      source_kind: 'File Upload',
-      duration: '42m 10s',
-      clipsCount: 8,
-      status: 'ready',
-      updatedAt: 'Yesterday',
-      topScore: 89.5,
-    },
-    {
-      id: 'proj_3',
-      title: 'Weekly Tech Keynote & Product Announcement',
-      source_kind: 'HLS Stream',
-      duration: '2h 05m',
-      clipsCount: 0,
-      status: 'transcribing',
-      updatedAt: '10 mins ago',
-      topScore: 0,
-    },
-  ]
+  const session = useRequireSession()
+  const router = useRouter()
+  const [projects, setProjects] = useState<Project[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<'all' | 'ready' | 'processing'>('all')
+  const [url, setUrl] = useState('')
+  const [duration, setDuration] = useState('auto')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [uploadPct, setUploadPct] = useState<number | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const q = filter === 'all' ? '' : `?status=${filter}`
+      const { projects } = await api.get<{ projects: Project[] }>(`/v1/projects${q}`)
+      setProjects(projects); setError(null)
+    } catch (e) { setError((e as Error).message) }
+  }, [filter])
+
+  useEffect(() => { if (session) load() }, [session, load])
+
+  // Realtime: project status changes stream in without polling (§13.1).
+  useEffect(() => {
+    if (!session) return
+    const ch = supabase.channel('projects-list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clip_projects' }, () => load())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [session, load])
+
+  async function create(source: { kind: 'upload'; r2_key: string } | { kind: 'url'; url: string }, title?: string) {
+    const options = { clip_durations: duration === 'auto' ? [] : [Number(duration)] }
+    const p = await api.post<Project>('/v1/projects', { source, title, options }, { 'Idempotency-Key': crypto.randomUUID() })
+    router.push(`/projects/view?id=${p.id}`)
+  }
+
+  async function onUrl(e: React.FormEvent) {
+    e.preventDefault()
+    if (!url.trim()) return
+    setBusy('url'); setFormError(null)
+    try { await create({ kind: 'url', url: url.trim() }) }
+    catch (err) { setFormError(err instanceof ApiError ? err.message : String(err)) }
+    finally { setBusy(null) }
+  }
+
+  async function onFile(file: File | undefined) {
+    if (!file) return
+    setBusy('upload'); setFormError(null); setUploadPct(0)
+    abortRef.current = new AbortController()
+    try {
+      const key = await uploadFile(file, setUploadPct, abortRef.current.signal)
+      await create({ kind: 'upload', r2_key: key }, file.name.replace(/\.[^.]+$/, ''))
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') setFormError(err instanceof ApiError ? err.message : `${(err as Error).message} — pick the same file again to resume.`)
+    } finally { setBusy(null); setUploadPct(null); if (fileRef.current) fileRef.current.value = '' }
+  }
+
+  if (!session) return <Loading />
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-10 space-y-10">
-      {/* Dashboard Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-6">
-        <div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">Video Projects</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Manage long-form source videos, monitor AI transcription & candidate moment extraction.
-          </p>
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 space-y-10">
+      <div className="border-b border-slate-800/80 pb-6">
+        <h1 className="text-3xl font-extrabold text-white tracking-tight">Projects</h1>
+        <p className="text-slate-400 text-sm mt-1">Drop in a long video or paste a link. You get a ranked shortlist of clips, each with the reason it scored well.</p>
+      </div>
+
+      <section
+        className="glass-panel rounded-2xl p-6 border border-indigo-500/20 shadow-xl space-y-4"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); if (!busy) onFile(e.dataTransfer.files?.[0]) }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-bold text-white">New project</h2>
+          <div className="flex items-center gap-1 text-xs bg-slate-900 border border-slate-800 p-1 rounded-lg" role="radiogroup" aria-label="Clip length">
+            {DURATIONS.map((d) => (
+              <button key={d.value} role="radio" aria-checked={duration === d.value} onClick={() => setDuration(d.value)}
+                className={`px-2.5 py-1 rounded-md ${duration === d.value ? 'bg-slate-700 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'}`}>{d.label}</button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center space-x-3">
-          <button className="px-4 py-2.5 glass-panel glass-panel-hover text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-slate-800 transition-colors flex items-center space-x-2">
-            <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-            </svg>
-            <span>Batch Ingest</span>
+        <form onSubmit={onUrl} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input value={url} onChange={(e) => setUrl(e.target.value)} type="url" placeholder="Paste a YouTube, Twitch, Vimeo or direct video link…"
+            className="md:col-span-3 w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-600 outline-none font-mono" />
+          <button disabled={!!busy || !url.trim()} className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-sm rounded-xl disabled:opacity-50">
+            {busy === 'url' ? 'Starting…' : 'Import link'}
           </button>
-        </div>
-      </div>
-
-      {/* Quick New Project Upload Card */}
-      <div className="glass-panel rounded-2xl p-6 border border-indigo-500/20 shadow-xl relative overflow-hidden">
-        <div className="absolute -top-12 -right-12 w-48 h-48 bg-indigo-500/10 blur-3xl pointer-events-none rounded-full"></div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-white flex items-center space-x-2">
-            <span>✨ Start New Auto-Clipping Project</span>
-          </h2>
-          <span className="text-xs text-indigo-400 font-mono">Whisper Large v3 Turbo</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2">
-            <input
-              type="text"
-              placeholder="Paste YouTube, Twitch, or Direct Video URL..."
-              className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-600 outline-none transition-all font-mono"
-            />
-          </div>
-          <Link href="/projects/demo-project-1" className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-indigo-500/20 text-center flex items-center justify-center space-x-2">
-            <span>Import & Extract Clips</span>
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-            </svg>
-          </Link>
-        </div>
-      </div>
-
-      {/* Projects List */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-white tracking-tight">Your Projects</h2>
-          <div className="flex items-center space-x-2 text-xs font-medium text-slate-400 bg-slate-900 border border-slate-800 p-1 rounded-lg">
-            <button className="px-3 py-1 bg-slate-800 text-white rounded-md font-semibold">All ({projects.length})</button>
-            <button className="px-3 py-1 hover:text-slate-200 transition-colors">Ready (2)</button>
-            <button className="px-3 py-1 hover:text-slate-200 transition-colors">Processing (1)</button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4">
-          {projects.map((p) => (
-            <div key={p.id} className="glass-panel glass-panel-hover rounded-2xl p-6 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="flex items-start space-x-4">
-                <div className="w-24 h-16 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-slate-600 font-mono text-[10px] shrink-0 relative overflow-hidden">
-                  <span className="absolute bottom-1 right-1 bg-slate-950/90 text-slate-300 px-1.5 py-0.5 rounded text-[9px] font-semibold">{p.duration}</span>
-                  <span>POSTER</span>
-                </div>
-                <div>
-                  <div className="flex items-center space-x-2 mb-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-md">{p.source_kind}</span>
-                    <span className="text-xs text-slate-500">&bull; Updated {p.updatedAt}</span>
-                  </div>
-                  <h3 className="text-base font-bold text-white hover:text-indigo-400 transition-colors cursor-pointer">
-                    {p.title}
-                  </h3>
-                  <div className="mt-2">
-                    <StageRail status={p.status} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-6 border-t md:border-t-0 border-slate-800/80 pt-4 md:pt-0 justify-between md:justify-end">
-                {p.clipsCount > 0 ? (
-                  <div className="text-right">
-                    <div className="text-sm font-extrabold text-indigo-400">{p.clipsCount} Candidates</div>
-                    <div className="text-[11px] text-slate-400">Top Score: <span className="text-emerald-400 font-bold">{p.topScore}/100</span></div>
-                  </div>
-                ) : (
-                  <div className="text-right text-xs text-slate-500 font-mono animate-pulse">
-                    Analyzing speech & boundaries...
-                  </div>
-                )}
-
-                <Link 
-                  href={`/projects/${p.id}`} 
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition-colors border border-slate-700/60 shadow-sm flex items-center space-x-1"
-                >
-                  <span>Open Shortlist</span>
-                  <span>&rarr;</span>
-                </Link>
-              </div>
+        </form>
+        <div className="rounded-xl border border-dashed border-slate-700 p-5 text-center text-sm text-slate-400">
+          {uploadPct != null ? (
+            <div className="space-y-2">
+              <div className="text-slate-200 font-semibold">Uploading… {Math.round(uploadPct * 100)}%</div>
+              <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden"><div className="bg-indigo-500 h-full transition-all" style={{ width: `${uploadPct * 100}%` }} /></div>
+              <button onClick={() => abortRef.current?.abort()} className="text-xs underline">Pause (resume by picking the file again)</button>
             </div>
+          ) : (
+            <>Drag a file here or{' '}
+              <button onClick={() => fileRef.current?.click()} disabled={!!busy} className="text-indigo-300 font-semibold hover:underline">choose a file</button>
+              <span className="block text-[11px] mt-1 text-slate-500">mp4, mov, mkv, webm, mp3, wav, m4a, flac · up to 5 GB · up to 4 hours</span>
+            </>
+          )}
+          <input ref={fileRef} type="file" className="hidden" accept=".mp4,.mov,.mkv,.webm,.mp3,.wav,.m4a,.flac,video/*,audio/*" onChange={(e) => onFile(e.target.files?.[0])} />
+        </div>
+        {formError && <ErrorBox message={formError} />}
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xl font-bold text-white">Your projects</h2>
+          <div className="flex items-center gap-1 text-xs font-medium text-slate-400 bg-slate-900 border border-slate-800 p-1 rounded-lg">
+            {(['all', 'ready', 'processing'] as const).map((f) => (
+              <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-md capitalize ${filter === f ? 'bg-slate-800 text-white font-semibold' : 'hover:text-slate-200'}`}>{f}</button>
+            ))}
+          </div>
+        </div>
+        {error && <ErrorBox message={error} onRetry={load} />}
+        {!projects && !error && <Loading label="Loading projects…" />}
+        {projects?.length === 0 && <p className="text-sm text-slate-400 py-10 text-center">No projects yet — start one above.</p>}
+        <div className="grid grid-cols-1 gap-4">
+          {projects?.map((p) => (
+            <Link key={p.id} href={`/projects/view?id=${p.id}`} className="glass-panel glass-panel-hover rounded-2xl p-5 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-5">
+              <div className="flex items-start gap-4 min-w-0">
+                <div className="w-28 h-16 bg-slate-900 border border-slate-800 rounded-xl shrink-0 relative overflow-hidden">
+                  {p.poster_url && <img src={p.poster_url} alt="" className="w-full h-full object-cover" />}
+                  {p.duration_ms != null && <span className="absolute bottom-1 right-1 bg-slate-950/90 text-slate-300 px-1.5 py-0.5 rounded text-[10px] font-semibold">{formatDuration(p.duration_ms)}</span>}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] text-slate-500 mb-1">{p.source_kind === 'url' ? 'Link' : 'Upload'} · {timeAgo(p.updated_at)}</div>
+                  <h3 className="text-base font-bold text-white truncate">{p.title}</h3>
+                  <div className="mt-2"><StageRail status={p.status} progress={p.progress} /></div>
+                  {p.status === 'failed' && p.error_detail && <p className="text-xs text-rose-300 mt-2">{p.error_detail}</p>}
+                </div>
+              </div>
+              {p.status === 'ready' && (
+                <div className="text-right shrink-0">
+                  <div className="text-sm font-extrabold text-indigo-300">{p.candidate_count} clips</div>
+                  {p.top_score != null && <div className="text-[11px] text-slate-400">Top score <span className="text-emerald-400 font-bold">{Number(p.top_score).toFixed(0)}</span></div>}
+                </div>
+              )}
+            </Link>
           ))}
         </div>
-      </div>
+      </section>
     </div>
   )
 }

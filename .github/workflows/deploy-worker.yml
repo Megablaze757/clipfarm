@@ -1,0 +1,78 @@
+name: Deploy apex-api Worker + Container
+
+# Ships the merged Worker (PocketAthlete + Clipper) and its FFmpeg Container.
+# Building the Container image needs Docker, which GitHub's runners have, so
+# nothing has to be installed locally.
+#
+# One run does everything Clipper needs:
+#   1. creates the clipper-prod R2 bucket (if missing)
+#   2. installs Clipper's tables into PocketAthlete's Supabase (clip_*; safe to re-run)
+#   3. deploys the Worker + Container
+#
+# Repo secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN    "Edit Cloudflare Workers" token, plus R2 + Containers edit
+#   CLOUDFLARE_ACCOUNT_ID   Cloudflare dashboard → Workers → right sidebar
+#   SUPABASE_ACCESS_TOKEN   optional — supabase.com/dashboard/account/tokens. Without
+#                           it, paste supabase/clipper-setup.sql into the SQL editor once.
+#
+# Manual only (Actions → Run workflow): this replaces the LIVE apex-api Worker
+# that PocketAthlete runs on, so it should never go out on an unrelated push.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: txqhstackgidjqkkrzyj # PocketAthlete's Supabase (public — it ships in the browser bundle)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Typecheck Worker
+        run: npm run typecheck --workspace=apps/worker
+      - name: Container unit tests
+        run: npm test --workspace=apps/container
+
+      - name: Check Cloudflare secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as repo secrets."; exit 1
+          fi
+
+      - name: Create R2 bucket (if missing)
+        working-directory: apps/worker
+        run: |
+          if npx wrangler r2 bucket list | grep -q 'clipper-prod'; then echo "clipper-prod exists"
+          else npx wrangler r2 bucket create clipper-prod; fi
+
+      - name: Install Clipper tables into Supabase
+        if: env.SUPABASE_ACCESS_TOKEN != ''
+        run: |
+          set -euo pipefail
+          jq -Rs '{query: .}' supabase/clipper-setup.sql > /tmp/body.json
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -m 120 \
+            -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            --data-binary @/tmp/body.json)
+          echo "HTTP $code"; jq . /tmp/out.json 2>/dev/null || cat /tmp/out.json
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then echo "::error::Supabase refused the SQL"; exit 1; fi
+      - name: Remind about the SQL
+        if: env.SUPABASE_ACCESS_TOKEN == ''
+        run: echo "::warning::SUPABASE_ACCESS_TOKEN not set — paste supabase/clipper-setup.sql into Supabase's SQL editor once (safe to re-run)."
+
+      - name: Deploy
+        working-directory: apps/worker
+        run: npx wrangler deploy
