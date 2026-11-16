@@ -1,4 +1,4 @@
-import { internalSecret, type Env } from "./env";
+import { apiUrl, internalSecret, type Env } from "./env";
 import { ApiError, CORS, safeEqual } from "./http";
 
 /**

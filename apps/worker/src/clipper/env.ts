@@ -25,9 +25,9 @@ export interface Env extends PocketAthleteEnv {
    */
   CLIPPER_INTERNAL_SECRET?: string; // secret
   /** This Worker's public origin, e.g. https://apex-api.you.workers.dev — the Container calls it. */
-  CLIPPER_API_URL: string;
+  CLIPPER_API_URL?: string;
   /** Where the Clipper web app lives (Stripe redirects back here). */
-  CLIPPER_APP_URL: string;
+  CLIPPER_APP_URL?: string;
 
   // Stripe. The secret key falls back to PocketAthlete's STRIPE_SECRET_KEY, so
   // one Stripe account can serve both apps; the webhook secret cannot (one per endpoint).
@@ -48,4 +48,14 @@ export function internalSecret(env: Env): string {
 
 export function stripeKey(env: Env): string {
   return (env.CLIPPER_STRIPE_SECRET_KEY || env.STRIPE_SECRET_KEY || "").trim();
+}
+
+/** This Worker's public URL. A dashboard paste needs no variable for it. */
+export function apiUrl(env: Env): string {
+  return (env.CLIPPER_API_URL || "https://apex-api.fitnessguru.workers.dev").trim().replace(/\/$/, "");
+}
+
+/** Where the Clipper web app lives (Stripe sends people back here). */
+export function appUrl(env: Env): string {
+  return (env.CLIPPER_APP_URL || "https://megablaze757.github.io/clipfarm").trim().replace(/\/$/, "");
 }

@@ -1,4 +1,4 @@
-import { stripeKey, type Env } from "./env";
+import { appUrl, stripeKey, type Env } from "./env";
 import type { Caller } from "./auth";
 import { dbJson, dbOne, dbPatch } from "./db";
 import { ApiError, body, json } from "./http";

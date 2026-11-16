@@ -1,5 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
-import { internalSecret, type Env } from "./env";
+import { apiUrl, internalSecret, type Env } from "./env";
 
 /**
  * The FFmpeg Container (§12). One instance per job, named after the project or
@@ -18,7 +18,7 @@ export class FFmpegContainer extends Container<Env> {
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
     this.envVars = {
-      CLIPPER_API_URL: env.CLIPPER_API_URL ?? "",
+      CLIPPER_API_URL: apiUrl(env),
       CLIPPER_INTERNAL_SECRET: internalSecret(env),
     };
   }
