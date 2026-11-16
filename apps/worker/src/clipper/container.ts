@@ -5,9 +5,11 @@ import { internalSecret, type Env } from "./env";
  * The FFmpeg Container (§12). One instance per job, named after the project or
  * render job, so a retry lands on the same instance and a job never shares CPU.
  *
- * Secrets reach the Container as env vars from the Worker, so they are set in
- * ONE place (`wrangler secret put` on apex-api). GROQ_SECRET is the same key
- * PocketAthlete's coach uses — Clipper's Whisper ASR shares it.
+ * Only used when CLIPPER_RUNNER = "container" (Workers Paid). The default is
+ * free GitHub Actions runners running the same code (clipper-job.yml).
+ *
+ * The Container holds no provider keys: database, Groq and AI calls all go
+ * through the Worker's /v1/internal routes, authenticated with this secret.
  */
 export class FFmpegContainer extends Container<Env> {
   defaultPort = 8080;
@@ -18,9 +20,6 @@ export class FFmpegContainer extends Container<Env> {
     this.envVars = {
       CLIPPER_API_URL: env.CLIPPER_API_URL ?? "",
       CLIPPER_INTERNAL_SECRET: internalSecret(env),
-      SUPABASE_URL: env.SUPABASE_URL ?? "",
-      SUPABASE_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-      GROQ_SECRET: env.GROQ_SECRET ?? "",
     };
   }
 
@@ -47,7 +46,7 @@ export class FFmpegContainer extends Container<Env> {
 
 /** Starts a job on its own Container. Resolves once the Container accepted it (202). */
 export async function dispatchToContainer(env: Env, name: string, path: "/process" | "/render", payload: unknown): Promise<void> {
-  const stub = getContainer(env.FFMPEG, name);
+  const stub = getContainer(env.FFMPEG!, name);
   const r = await stub.fetch(new Request(`http://container${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

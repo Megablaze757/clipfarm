@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ffmpeg, probe } from "../lib/proc";
@@ -22,7 +23,9 @@ export interface RenderSpec {
   encode: { crf: number; preset: string; fps: number };
 }
 
-const FONT = "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf";
+// Alpine (Container) and Ubuntu (GitHub runner) keep DejaVu in different places.
+const FONT = ["/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+  .find((p) => existsSync(p)) ?? "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 const dt = (s: string) => s.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\u2019").replace(/%/g, "\\%");
 
 /**

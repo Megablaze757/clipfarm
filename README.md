@@ -16,9 +16,13 @@ apps/worker     apex-api — ONE Cloudflare Worker for PocketAthlete AND Clipper
      │            shared: GROQ_SECRET / OPENROUTER_API_KEY / NVIDIA_SECRET and the
      │                    Groq → OpenRouter → NVIDIA fallback ladder
      ▼
-apps/container  FFmpeg Container (Cloudflare Containers): ingest → Whisper ASR (Groq)
+apps/container  The video pipeline: ingest → Whisper ASR (Groq, via the Worker)
                 → candidates → scoring (shared AI ladder, heuristics if all fail)
-                → boundary snapping → proxies; final renders with burned captions
+                → boundary snapping → proxies; final renders with burned captions.
+                Runs FREE on GitHub Actions (.github/workflows/clipper-job.yml),
+                or on Cloudflare Containers (Workers Paid) with CLIPPER_RUNNER=container.
+                Holds no keys: DB, Groq, AI and R2 all go through the Worker, and a
+                GitHub run proves itself with a GitHub OIDC token — no repo secrets.
 supabase/       clipper-setup.sql — Clipper's clip_* tables inside PocketAthlete's
                 Supabase project (same accounts, same keys)
 ```
@@ -36,18 +40,30 @@ blurred-letterbox "fit".
 Clipper reuses everything apex-api already has — PocketAthlete's Supabase project
 (and its accounts), AI keys, and Stripe key. **No new secrets.**
 
-1. Add repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (and optionally
-   `SUPABASE_ACCESS_TOKEN`), then run the **Deploy apex-api Worker + Container** Action.
+Everything runs on free tiers: Workers Free, GitHub Actions for FFmpeg, R2's free
+10 GB (Cloudflare asks for a card on file to switch R2 on, but doesn't charge
+inside the free tier).
+
+1. **Let the Worker start GitHub runs.** PocketAthlete's `GITHUB_TOKEN` (a
+   fine-grained token already on apex-api) needs this repo added to its repository
+   access, with **Contents: Read and write**. github.com → Settings → Developer
+   settings → Fine-grained tokens → edit it. (Or set a separate
+   `CLIPPER_GITHUB_TOKEN`.)
+2. **Deploy.** Add repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (and
+   optionally `SUPABASE_ACCESS_TOKEN`), then run the **Deploy apex-api Worker** Action.
    It creates the R2 bucket, installs the `clip_*` tables, and deploys. Without
-   `SUPABASE_ACCESS_TOKEN`, paste `supabase/clipper-setup.sql` into Supabase's SQL editor
-   once instead. Containers need the Workers Paid plan.
-2. GitHub Pages rebuilds the web app on every push to `main`.
+   `SUPABASE_ACCESS_TOKEN`, paste `supabase/clipper-setup.sql` into Supabase's SQL
+   editor once instead.
+   *Pasting `apex-api-merged.worker.js` into the dashboard also works*: then add an R2
+   binding `R2_BUCKET` → `clipper-prod`, the `nodejs_compat` flag, the vars
+   `CLIPPER_API_URL`/`CLIPPER_APP_URL`, and a `*/10 * * * *` cron trigger by hand.
+3. GitHub Pages rebuilds the web app on every push to `main`.
 
 **Important — PocketAthlete's own repo also deploys apex-api.** Its
 `.github/workflows/deploy-worker.yml` runs on every push to `cloudflare/**` and would
-replace this merged Worker with a PocketAthlete-only one (Clipper's routes and
-Container would disappear). Disable that workflow there, and from now on deploy
-PocketAthlete changes by syncing them here (below) and running this repo's Action.
+replace this merged Worker with a PocketAthlete-only one (Clipper's routes would
+disappear). Disable that workflow there, and from now on deploy PocketAthlete
+changes by syncing them here (below) and running this repo's Action.
 
 Later, for paid Clipper plans: create Stripe prices and put them in
 `CLIPPER_PRICE_*` in `apps/worker/wrangler.toml`, add a Stripe webhook to

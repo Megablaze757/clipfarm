@@ -1,39 +1,30 @@
 import { openAsBlob } from "node:fs";
 import { join } from "node:path";
 import { ffmpeg, StageError } from "../lib/proc";
-import { llm, parseJsonObject } from "../lib/worker";
+import { llm, parseJsonObject, transcribeViaWorker } from "../lib/worker";
 import type { Segment, Transcript, Word } from "../lib/types";
 
 /**
- * §6.1 ASR — Groq Whisper Large v3 Turbo, using the same GROQ_SECRET as the
- * rest of apex-api. Audio is cut into 10-minute FLAC chunks with 2 s overlap
- * (well under Groq's 25 MB upload limit) and stitched at the seams.
+ * §6.1 ASR — Groq Whisper Large v3 Turbo, called through the Worker so the
+ * runner never holds GROQ_SECRET (it's the same key PocketAthlete uses). Audio
+ * is cut into 10-minute FLAC chunks with 2 s overlap (well under Groq's 25 MB
+ * upload limit) and stitched at the seams.
  */
 const CHUNK_S = 600;
 const OVERLAP_S = 2;
-const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
-const MODEL = "whisper-large-v3-turbo";
 
 interface GroqWord { word: string; start: number; end: number }
 interface GroqSegment { id: number; start: number; end: number; text: string; avg_logprob?: number; no_speech_prob?: number }
 interface GroqResponse { text: string; language?: string; words?: GroqWord[]; segments?: GroqSegment[] }
 
 async function transcribeChunk(path: string, language: string | null): Promise<GroqResponse> {
-  const key = process.env.GROQ_SECRET;
-  if (!key) throw new StageError("E_ASR_FAILED", "GROQ_SECRET is not set on the Worker, so speech can't be transcribed.");
   for (let attempt = 0; attempt < 5; attempt++) {
-    const form = new FormData();
-    form.append("file", await openAsBlob(path), "chunk.flac");
-    form.append("model", MODEL);
-    form.append("response_format", "verbose_json");
-    form.append("timestamp_granularities[]", "word");
-    form.append("timestamp_granularities[]", "segment");
-    form.append("temperature", "0");
-    if (language && language !== "auto") form.append("language", language);
-    const r = await fetch(GROQ_URL, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(180_000) })
+    const r = await transcribeViaWorker(await openAsBlob(path), language)
       .catch((e) => ({ ok: false, status: 0, headers: new Headers(), text: async () => String(e) }) as unknown as Response);
     if (r.ok) return (await r.json()) as GroqResponse;
     const detail = (await r.text()).slice(0, 300);
+    if (/GROQ_SECRET/.test(detail)) throw new StageError("E_ASR_FAILED", "GROQ_SECRET is not set on the Worker, so speech can't be transcribed.");
+    if (r.status === 401 || r.status === 403) throw new StageError("E_ASR_FAILED", `The Worker refused the runner (${r.status}): ${detail}`);
     if (r.status === 429 || r.status >= 500 || r.status === 0) {
       // R-10: exponential backoff, honouring Retry-After when Groq sends one.
       const after = Number(r.headers.get("retry-after"));

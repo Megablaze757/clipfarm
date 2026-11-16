@@ -5,8 +5,8 @@ import { ApiError, body, CORS, errorResponse, json, requireUuid } from "./http";
 import { serveMedia, signedUrl, streamObject } from "./media";
 import { internalR2, uploadAbort, uploadComplete, uploadCreate, uploadPart } from "./upload";
 import { checkout, portal, webhook } from "./billing";
-import { internalComplete } from "./internal";
-import { clipWords, dispatchProject, dispatchRender, minutesUsed, IN_FLIGHT, type ClipEdits, type ProjectRow } from "./jobs";
+import { internalComplete, internalDb, internalJob, internalTranscribe } from "./internal";
+import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN_FLIGHT, type ClipEdits, type ProjectRow } from "./jobs";
 import { PLANS, PRESETS } from "./plans";
 import { modelChain } from "../pocketathlete/index";
 
@@ -14,14 +14,14 @@ type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[])
 type Authed = (req: Request, env: Env, caller: Caller, params: string[], ctx: ExecutionContext) => Promise<Response>;
 
 const authed = (fn: Authed): Handler => async (req, env, ctx, params) => fn(req, env, await requireCaller(req, env), params, ctx);
-const internal = (fn: Handler): Handler => async (req, env, ctx, params) => { requireInternal(req, env); return fn(req, env, ctx, params); };
+const internal = (fn: Handler): Handler => async (req, env, ctx, params) => { await requireInternal(req, env); return fn(req, env, ctx, params); };
 
 const UUID = "([0-9a-f-]{36})";
 const ROUTES: [string, RegExp, Handler][] = [
   ["GET", /^\/v1\/health$/, async (_r, env) => json({
     ok: true, service: "clipper",
     ai: modelChain(env).map((r) => `${r.provider}/${r.model}`),
-    configured: { supabase: !!env.SUPABASE_SERVICE_ROLE_KEY, internal_secret: !!internalSecret(env), r2: !!env.R2_BUCKET, container: !!env.FFMPEG },
+    configured: { supabase: !!env.SUPABASE_SERVICE_ROLE_KEY, internal_secret: !!internalSecret(env), r2: !!env.R2_BUCKET, runner: runnerMode(env) },
   })],
   ["GET", /^\/v1\/media$/, async (r, env) => serveMedia(r, env)],
   ["GET", /^\/v1\/plans$/, async () => json({ plans: Object.values(PLANS), presets: PRESETS })],
@@ -59,8 +59,11 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["POST", /^\/v1\/billing\/portal$/, authed(async (_r, env, c) => portal(env, c))],
   ["POST", /^\/v1\/webhooks\/stripe$/, async (r, env) => webhook(r, env)],
 
-  // Container -> Worker
+  // Job runner (GitHub Actions or Container) -> Worker
   ["POST", /^\/v1\/internal\/complete$/, internal(async (r, env) => internalComplete(r, env))],
+  ["POST", /^\/v1\/internal\/db$/, internal(async (r, env) => internalDb(r, env))],
+  ["POST", /^\/v1\/internal\/transcribe$/, internal(async (r, env) => internalTranscribe(r, env))],
+  ["GET", /^\/v1\/internal\/jobs\/(process|render)\/([0-9a-f-]{36})$/, internal(async (_r, env, _c, p) => internalJob(env, p[0], p[1]))],
   ["GET", /^\/v1\/internal\/r2$/, internal(async (r, env) => streamObject(r, env, new URL(r.url).searchParams.get("key") ?? ""))],
   ["PUT", /^\/v1\/internal\/r2$/, internal(async (r, env) => internalR2(r, env, "object"))],
   ["DELETE", /^\/v1\/internal\/r2$/, internal(async (r, env) => internalR2(r, env, "object"))],
@@ -82,6 +85,17 @@ export async function handleClipper(req: Request, env: Env, ctx: ExecutionContex
   const requestId = `req_${crypto.randomUUID().slice(0, 12)}`;
   const { pathname } = new URL(req.url);
   try {
+    // Without the R2 binding or a job runner, say so plainly instead of a
+    // TypeError 500 — PocketAthlete and the rest of /v1 keep working either way.
+    const needsStorage = /^\/v1\/(upload\/|media$|internal\/r2)/.test(pathname) || (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname));
+    if (needsStorage && !env.R2_BUCKET) {
+      throw new ApiError(503, "E_PROCESSING_UNAVAILABLE",
+        "Video storage isn't switched on for this Worker yet: add an R2 bucket binding named R2_BUCKET (bucket clipper-prod).");
+    }
+    if (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname) && !runnerMode(env)) {
+      throw new ApiError(503, "E_PROCESSING_UNAVAILABLE",
+        "Video processing isn't switched on yet: the Worker's GITHUB_TOKEN must be set and allowed to start workflows on the Clipper repo.");
+    }
     let pathMatched = false;
     for (const [method, re, handler] of ROUTES) {
       const m = re.exec(pathname);

@@ -40,10 +40,18 @@ export async function dispatchProject(env: Env, projectId: string): Promise<"dis
     `projects?tenant_id=eq.${project.tenant_id}&deleted_at=is.null&status=in.(${IN_FLIGHT.join(",")})&select=id`);
   if (running >= plan.concurrentJobs) return "waiting";
 
-  const used = await minutesUsed(env, project.tenant_id);
   await dbPatch(env, `projects?id=eq.${projectId}&status=eq.queued`, { dispatched_at: new Date().toISOString() });
-  await dispatchToContainer(env, `project:${projectId}`, "/process", {
-    projectId,
+  await runJob(env, "process", projectId, await processPayload(env, project));
+  return "dispatched";
+}
+
+/** What the processing job needs. Also served to GitHub runners at /v1/internal/jobs/process/{id}. */
+export async function processPayload(env: Env, project: ProjectRow) {
+  const tenant = await dbOne<{ plan: string }>(env, `tenants?id=eq.${project.tenant_id}&select=plan`);
+  const plan = planFor(tenant?.plan);
+  const used = await minutesUsed(env, project.tenant_id);
+  return {
+    projectId: project.id,
     tenantId: project.tenant_id,
     source: project.source_kind === "upload" ? { kind: "upload", r2_key: project.source_uri } : { kind: "url", url: project.source_uri },
     options: project.options ?? {},
@@ -53,8 +61,45 @@ export async function dispatchProject(env: Env, projectId: string): Promise<"dis
       maxSourceMinutes: plan.maxSourceMinutes,
       remainingMinutes: Math.max(0, plan.monthlyMinutes - used),
     },
+  };
+}
+
+/** Which machine runs FFmpeg: free GitHub Actions runners (default) or Cloudflare Containers. */
+export function runnerMode(env: Env): "github" | "container" | null {
+  if ((env.CLIPPER_RUNNER ?? "github") === "container") return env.FFMPEG ? "container" : null;
+  return githubToken(env) ? "github" : null;
+}
+
+const githubToken = (env: Env) => (env.CLIPPER_GITHUB_TOKEN || env.GITHUB_TOKEN || "").trim();
+const githubRepo = (env: Env) => (env.CLIPPER_GITHUB_REPO || "Megablaze757/clipfarm").trim();
+
+/**
+ * Starts a job. In GitHub mode this fires a repository_dispatch event; the
+ * runner (.github/workflows/clipper-job.yml) then fetches the job from the
+ * Worker itself, proving who it is with a GitHub OIDC token — so nothing
+ * sensitive ever goes in the (publicly visible) event payload.
+ */
+export async function runJob(env: Env, kind: "process" | "render", id: string, payload: unknown): Promise<void> {
+  const mode = runnerMode(env);
+  if (mode === "container") {
+    await dispatchToContainer(env, `${kind === "process" ? "project" : "render"}:${id}`, kind === "process" ? "/process" : "/render", payload);
+    return;
+  }
+  if (mode !== "github") throw new Error("no video runner configured (set GITHUB_TOKEN, or CLIPPER_RUNNER=container with the Container binding)");
+  const r = await fetch(`https://api.github.com/repos/${githubRepo(env)}/dispatches`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${githubToken(env)}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "apex-api-clipper",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ event_type: `clipper-${kind}`, client_payload: { id } }),
   });
-  return "dispatched";
+  if (r.status !== 204) {
+    throw new Error(`GitHub refused the dispatch (${r.status}) — the token needs Contents: read & write on ${githubRepo(env)}: ${(await r.text()).slice(0, 200)}`);
+  }
 }
 
 interface ClipRow {
@@ -101,6 +146,7 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
   const edits = clip.edits ?? {};
   const spec = {
     version: 3,
+    project_id: project?.id ?? cand.project_id,
     mezzanine_key: `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
     output_key: `${clip.tenant_id}/projects/${cand.project_id}/renders/${job.id}.mp4`,
     trim: { in_ms: clip.t_in_ms, out_ms: clip.t_out_ms },
@@ -120,8 +166,8 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     encode: { vcodec: "h264", crf: 20, preset: "medium", fps: preset.fps, faststart: true },
   };
   await dbPatch(env, `render_jobs?id=eq.${job.id}`, { spec });
-  await dispatchToContainer(env, `render:${job.id}`, "/render", {
-    jobId: job.id, clipId: clip.id, tenantId: clip.tenant_id, projectId: project?.id ?? cand.project_id, spec,
+  await runJob(env, "render", job.id, {
+    jobId: job.id, clipId: clip.id, tenantId: clip.tenant_id, projectId: spec.project_id, spec,
   });
 }
 

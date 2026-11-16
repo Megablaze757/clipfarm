@@ -2,6 +2,7 @@ import { internalSecret, type Env } from "./env";
 import { dbOne, rpc } from "./db";
 import { ApiError, safeEqual } from "./http";
 import { planFor, type Plan } from "./plans";
+import { verifyGithubRunner } from "./github-oidc";
 
 export interface Caller {
   userId: string;
@@ -45,10 +46,14 @@ export function requireEditor(caller: Caller) {
   if (caller.role === "viewer") throw new ApiError(403, "E_FORBIDDEN", "viewers cannot change projects");
 }
 
-/** The Container authenticates its calls back to the Worker with the shared secret. */
-export function requireInternal(req: Request, env: Env) {
+/**
+ * Who may call /v1/internal/*: the Cloudflare Container (shared secret it gets
+ * as an env var) or a GitHub Actions run of clipper-job.yml (GitHub OIDC token,
+ * no secret involved).
+ */
+export async function requireInternal(req: Request, env: Env): Promise<void> {
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!internalSecret(env) || !safeEqual(token, internalSecret(env))) {
-    throw new ApiError(401, "E_UNAUTHORIZED", "internal route");
-  }
+  if (internalSecret(env) && safeEqual(token, internalSecret(env))) return;
+  if (token.split(".").length === 3 && await verifyGithubRunner(token, (env.CLIPPER_GITHUB_REPO || "Megablaze757/clipfarm").trim())) return;
+  throw new ApiError(401, "E_UNAUTHORIZED", "internal route");
 }

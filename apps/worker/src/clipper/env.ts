@@ -9,7 +9,14 @@ import type { Env as PocketAthleteEnv } from "../pocketathlete/index";
 export interface Env extends PocketAthleteEnv {
   // Bindings
   R2_BUCKET: R2Bucket;
-  FFMPEG: DurableObjectNamespace<import("./container").FFmpegContainer>;
+  /** Only bound when CLIPPER_RUNNER = "container" (needs Workers Paid). */
+  FFMPEG?: DurableObjectNamespace<import("./container").FFmpegContainer>;
+  /** "github" (default, free): FFmpeg runs on GitHub Actions. "container": Cloudflare Containers. */
+  CLIPPER_RUNNER?: string;
+  /** Starts the GitHub runs. Defaults to GITHUB_TOKEN (PocketAthlete's), which must also cover the Clipper repo. */
+  CLIPPER_GITHUB_TOKEN?: string;
+  /** owner/repo holding .github/workflows/clipper-job.yml. Default Megablaze757/clipfarm. */
+  CLIPPER_GITHUB_REPO?: string;
 
   /**
    * Optional. Signs media URLs and authenticates the Container's calls back.

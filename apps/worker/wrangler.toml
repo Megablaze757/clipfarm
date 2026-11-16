@@ -52,6 +52,9 @@ CLIPPER_PRICE_TEAM = ""
 CLIPPER_PRICE_AGENCY = ""
 CLIPPER_PRICE_METERED = ""
 CLIPPER_METER_EVENT = "clipper_source_minutes"
+# Where FFmpeg runs — see the note above [[containers]] at the bottom.
+CLIPPER_RUNNER = "github"
+CLIPPER_GITHUB_REPO = "Megablaze757/clipfarm"
 
 # Secrets — `npx wrangler secret put NAME`. Existing PocketAthlete secrets stay:
 #   GROQ_SECRET, OPENROUTER_API_KEY, NVIDIA_SECRET   (shared by both apps)
@@ -66,16 +69,26 @@ CLIPPER_METER_EVENT = "clipper_source_minutes"
 binding = "R2_BUCKET"
 bucket_name = "clipper-prod"
 
-[[containers]]
-class_name = "FFmpegContainer"
-image = "../container/Dockerfile"
-max_instances = 20
-instance_type = "standard-2"
+# --- Where FFmpeg runs ----------------------------------------------------------
+# "github" (default, FREE): each job runs on a GitHub Actions runner in
+#   Megablaze757/clipfarm (.github/workflows/clipper-job.yml). The Worker starts
+#   runs with GITHUB_TOKEN — PocketAthlete's existing secret — so that token must
+#   also have Contents: read & write on the clipfarm repo. (Or set
+#   CLIPPER_GITHUB_TOKEN to a separate token.)
+# "container" (Workers Paid): Cloudflare Containers. Set CLIPPER_RUNNER to
+#   "container" in [vars] and uncomment the three blocks underneath; deploying needs
+#   Docker (the deploy Action has it).
 
-[[durable_objects.bindings]]
-name = "FFMPEG"
-class_name = "FFmpegContainer"
-
-[[migrations]]
-tag = "clipper-v1"
-new_sqlite_classes = ["FFmpegContainer"]
+# [[containers]]
+# class_name = "FFmpegContainer"
+# image = "../container/Dockerfile"
+# max_instances = 20
+# instance_type = "standard-2"
+#
+# [[durable_objects.bindings]]
+# name = "FFMPEG"
+# class_name = "FFmpegContainer"
+#
+# [[migrations]]
+# tag = "clipper-v1"
+# new_sqlite_classes = ["FFmpegContainer"]

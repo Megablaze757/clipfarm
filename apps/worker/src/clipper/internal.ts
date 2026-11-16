@@ -1,6 +1,98 @@
 import type { Env } from "./env";
 import { completeWithFallbacks, modelChain } from "../pocketathlete/index";
 import { ApiError, body, json } from "./http";
+import { db, dbOne } from "./db";
+import { processPayload, type ProjectRow } from "./jobs";
+
+/**
+ * The job runner (GitHub Actions or the Container) holds NO keys. Everything
+ * needing one goes through these routes: database writes, Groq transcription,
+ * the AI ladder, and R2 (upload.ts). Keys stay in the Worker.
+ */
+
+// Tables the runner may write. Anything else is refused.
+const RUNNER_TABLES = new Set(["projects", "transcripts", "candidates", "clips", "render_jobs", "usage_events", "artifacts"]);
+
+/** Minimal Supabase-style write proxy for the runner: insert / upsert / update / delete. */
+export async function internalDb(req: Request, env: Env): Promise<Response> {
+  const b = await body<{
+    table?: string; op?: string; values?: unknown;
+    match?: Record<string, string | number>; onConflict?: string; ignoreDuplicates?: boolean;
+  }>(req);
+  const table = String(b.table ?? "");
+  if (!RUNNER_TABLES.has(table)) throw new ApiError(403, "E_FORBIDDEN", `table ${table} is not writable by the runner`);
+  const filters = Object.entries(b.match ?? {})
+    .filter(([k]) => /^[a-z_]+$/.test(k))
+    .map(([k, v]) => `${k}=eq.${encodeURIComponent(String(v))}`).join("&");
+  let path = table;
+  let init: RequestInit;
+  switch (b.op) {
+    case "insert":
+      init = { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(b.values) };
+      break;
+    case "upsert":
+      if (b.onConflict && /^[a-z_,]+$/.test(b.onConflict)) path += `?on_conflict=${b.onConflict}`;
+      init = { method: "POST", headers: { Prefer: `resolution=${b.ignoreDuplicates ? "ignore" : "merge"}-duplicates,return=minimal` }, body: JSON.stringify(b.values) };
+      break;
+    case "update":
+      if (!filters) throw new ApiError(400, "E_VALIDATION", "update needs a match");
+      path += `?${filters}`;
+      init = { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(b.values) };
+      break;
+    case "delete":
+      if (!filters) throw new ApiError(400, "E_VALIDATION", "delete needs a match");
+      path += `?${filters}`;
+      init = { method: "DELETE", headers: { Prefer: "return=minimal" } };
+      break;
+    default:
+      throw new ApiError(400, "E_VALIDATION", "op must be insert, upsert, update or delete");
+  }
+  const r = await db(env, path, init);
+  if (!r.ok) return json({ error: { message: `${r.status} ${(await r.text()).slice(0, 300)}` } }, 200);
+  return json({ error: null });
+}
+
+/**
+ * Groq Whisper through the Worker's GROQ_SECRET (shared with PocketAthlete).
+ * The runner posts one audio chunk; Groq's status and Retry-After are passed
+ * straight back so the runner's own backoff keeps working.
+ */
+export async function internalTranscribe(req: Request, env: Env): Promise<Response> {
+  const key = (env.GROQ_SECRET || "").trim();
+  if (!key) return json({ error: "GROQ_SECRET is not set on the Worker" }, 503);
+  const url = new URL(req.url);
+  const form = new FormData();
+  form.append("file", new File([await req.arrayBuffer()], "chunk.flac", { type: "audio/flac" }));
+  form.append("model", "whisper-large-v3-turbo");
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "word");
+  form.append("timestamp_granularities[]", "segment");
+  form.append("temperature", "0");
+  const lang = url.searchParams.get("language");
+  if (lang && lang !== "auto" && /^[a-z]{2,3}$/.test(lang)) form.append("language", lang);
+  const r = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form,
+  });
+  const headers: Record<string, string> = { "Content-Type": r.headers.get("Content-Type") || "application/json" };
+  const retry = r.headers.get("retry-after");
+  if (retry) headers["Retry-After"] = retry;
+  return new Response(r.body, { status: r.status, headers });
+}
+
+/** A GitHub runner fetches its job here (the dispatch event only carries the id). */
+export async function internalJob(env: Env, kind: string, id: string): Promise<Response> {
+  if (kind === "process") {
+    const project = await dbOne<ProjectRow>(env, `projects?id=eq.${id}&deleted_at=is.null&select=*`);
+    if (!project) throw new ApiError(404, "E_NOT_FOUND", "project not found");
+    if (project.status !== "queued") return json({ skip: `project is ${project.status}` }, 409);
+    return json(await processPayload(env, project));
+  }
+  const job = await dbOne<{ id: string; clip_id: string; tenant_id: string; status: string; spec: any }>(
+    env, `render_jobs?id=eq.${id}&select=id,clip_id,tenant_id,status,spec`);
+  if (!job?.spec) throw new ApiError(404, "E_NOT_FOUND", "render not found");
+  if (job.status !== "queued") return json({ skip: `render is ${job.status}` }, 409);
+  return json({ jobId: job.id, clipId: job.clip_id, tenantId: job.tenant_id, projectId: job.spec.project_id, spec: job.spec });
+}
 
 /**
  * The Container's door to the shared AI ladder.

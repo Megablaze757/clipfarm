@@ -1,0 +1,79 @@
+name: Clipper video job
+
+# The free FFmpeg runner. The apex-api Worker starts this with a
+# repository_dispatch event ("clipper-process" / "clipper-render") carrying only
+# a project or render id. The run then fetches the job from the Worker and does
+# all its reads and writes through it, proving who it is with a GitHub OIDC
+# token (id-token: write below). So:
+#   - this repo needs NO secrets;
+#   - nothing sensitive appears in the (public) run log;
+#   - the Worker only trusts this exact file on main.
+#
+# Free on public repos; 2,000 minutes/month on private ones. A 1-hour podcast
+# takes roughly 10–20 runner minutes.
+
+on:
+  repository_dispatch:
+    types: [clipper-process, clipper-render]
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "process or render"
+        type: choice
+        options: [process, render]
+        default: process
+      id:
+        description: "Project id (process) or render job id (render)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # One run per job id: a duplicate dispatch waits, then finds the job taken and exits.
+  group: clipper-${{ github.event.client_payload.id || inputs.id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      CLIPPER_API_URL: ${{ vars.CLIPPER_API_URL || 'https://apex-api.fitnessguru.workers.dev' }}
+      JOB_KIND: ${{ github.event.action == 'clipper-render' && 'render' || github.event.action == 'clipper-process' && 'process' || inputs.kind }}
+      JOB_ID: ${{ github.event.client_payload.id || inputs.id }}
+    steps:
+      # The id arrives from outside, so it's validated before anything uses it,
+      # and only ever passed through env vars — never pasted into a script.
+      - name: Check job
+        run: |
+          case "$JOB_KIND" in process|render) ;; *) echo "::error::bad kind"; exit 1 ;; esac
+          echo "$JOB_ID" | grep -Eq '^[0-9a-fA-F-]{36}$' || { echo "::error::bad id"; exit 1; }
+          echo "Running $JOB_KIND $JOB_ID"
+
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg, fonts, yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core > /dev/null
+          sudo curl -sSfL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod +x /usr/local/bin/yt-dlp
+          ffmpeg -hide_banner -version | head -1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build the pipeline
+        run: |
+          npm ci --workspace=apps/container --no-audit --no-fund
+          npm run build --workspace=apps/container
+
+      - name: Run
+        env:
+          WORK_DIR: ${{ runner.temp }}/clipper
+        run: node apps/container/dist/cli.js "$JOB_KIND" "$JOB_ID"

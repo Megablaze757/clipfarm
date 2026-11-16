@@ -1,16 +1,16 @@
-name: Deploy apex-api Worker + Container
+name: Deploy apex-api Worker
 
-# Ships the merged Worker (PocketAthlete + Clipper) and its FFmpeg Container.
-# Building the Container image needs Docker, which GitHub's runners have, so
-# nothing has to be installed locally.
+# Ships the merged Worker (PocketAthlete + Clipper) from CI, so nothing has to
+# be installed locally. Works on the FREE Workers plan: video jobs run on GitHub
+# Actions (clipper-job.yml), not Cloudflare Containers.
 #
 # One run does everything Clipper needs:
 #   1. creates the clipper-prod R2 bucket (if missing)
 #   2. installs Clipper's tables into PocketAthlete's Supabase (clip_*; safe to re-run)
-#   3. deploys the Worker + Container
+#   3. deploys the Worker
 #
 # Repo secrets (Settings → Secrets and variables → Actions):
-#   CLOUDFLARE_API_TOKEN    "Edit Cloudflare Workers" token, plus R2 + Containers edit
+#   CLOUDFLARE_API_TOKEN    "Edit Cloudflare Workers" template, plus R2 edit
 #   CLOUDFLARE_ACCOUNT_ID   Cloudflare dashboard → Workers → right sidebar
 #   SUPABASE_ACCESS_TOKEN   optional — supabase.com/dashboard/account/tokens. Without
 #                           it, paste supabase/clipper-setup.sql into the SQL editor once.
@@ -43,7 +43,7 @@ jobs:
 
       - name: Typecheck Worker
         run: npm run typecheck --workspace=apps/worker
-      - name: Container unit tests
+      - name: Pipeline unit tests
         run: npm test --workspace=apps/container
 
       - name: Check Cloudflare secrets
