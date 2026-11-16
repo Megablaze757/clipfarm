@@ -8,3 +8,5 @@ dist
 apps/web/out
 .wrangler
 apex-api-merged.worker.js
+__pycache__/
+*.pyc
