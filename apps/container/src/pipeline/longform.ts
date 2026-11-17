@@ -182,6 +182,77 @@ export function spansGap(words: { t0: number; t1: number }[], i0: number, i1: nu
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Fast clip video for HLS streams (Twitch VODs and most live archives)
+
+export interface HlsSegment { uri: string; t0: number; t1: number } // stream ms
+export interface HlsPlaylist { segments: HlsSegment[]; init?: string }
+
+/** Parses a media playlist: cumulative EXTINF times, absolute segment URLs. */
+export function parseHlsPlaylist(text: string, base: string): HlsPlaylist {
+  const segments: HlsSegment[] = [];
+  let t = 0, dur = 0, init: string | undefined;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("#EXTINF:")) { dur = Math.round(parseFloat(line.slice(8)) * 1000); continue; }
+    if (line.startsWith("#EXT-X-MAP:")) { const m = line.match(/URI="([^"]+)"/); if (m) init = new URL(m[1], base).toString(); continue; }
+    if (line.startsWith("#")) continue;
+    segments.push({ uri: new URL(line, base).toString(), t0: t, t1: t + dur });
+    t += dur; dur = 0;
+  }
+  return { segments, init };
+}
+
+/**
+ * The stream's ≤1080p HLS playlist, fetched ONCE per project. Null when the
+ * site doesn't serve HLS — then each clip falls back to yt-dlp sections.
+ */
+export async function hlsPlaylist(url: string): Promise<HlsPlaylist | null> {
+  try {
+    const { stdout } = await run(YTDLP(), ["--no-playlist", "-g", "-f", "best[height<=1080][protocol*=m3u8]/best[protocol*=m3u8]", url], { timeoutMs: 120_000 });
+    const m3u8 = stdout.trim().split("\n")[0];
+    if (!m3u8 || !/^https?:/.test(m3u8)) return null;
+    const r = await fetch(m3u8, { signal: AbortSignal.timeout(60_000) });
+    if (!r.ok) return null;
+    const pl = parseHlsPlaylist(await r.text(), m3u8);
+    return pl.segments.length ? pl : null;
+  } catch (e) {
+    console.warn(`no HLS playlist: ${String((e as Error).message).slice(-200)}`);
+    return null;
+  }
+}
+
+/**
+ * Downloads only the segments covering [startMs, endMs] (8 at a time), joins
+ * them, and remuxes to MP4. Returns where the file starts in stream time —
+ * exact, from the playlist, so no alignment guess is needed.
+ */
+export async function downloadHlsSection(pl: HlsPlaylist, startMs: number, endMs: number, dir: string, out: string): Promise<number> {
+  const segs = pl.segments.filter((s) => s.t1 > startMs && s.t0 < endMs);
+  if (!segs.length) throw new Error("no segments in range");
+  const parts: Buffer[] = new Array(segs.length);
+  let next = 0;
+  const get = async (u: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await fetch(u, { signal: AbortSignal.timeout(60_000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return Buffer.from(await r.arrayBuffer());
+      } catch (e) { if (attempt >= 3) throw e; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, segs.length) }, async () => {
+    while (next < segs.length) { const i = next++; parts[i] = await get(segs[i].uri); }
+  }));
+  const { writeFile } = await import("node:fs/promises");
+  const joined = join(dir, `${out.replace(/^.*[\\/]/, "")}.ts`);
+  await writeFile(joined, Buffer.concat([...(pl.init ? [await get(pl.init)] : []), ...parts]));
+  // Segments carry stream-time timestamps (27 h in…): restart the clip at 0.
+  await ffmpeg(["-i", joined, "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", out], 10 * 60 * 1000);
+  return segs[0].t0;
+}
+
 /** Downloads only [startMs, endMs] of the stream's video. */
 export async function downloadSection(url: string, startMs: number, endMs: number, out: string): Promise<void> {
   const t = (ms: number) => (ms / 1000).toFixed(1);

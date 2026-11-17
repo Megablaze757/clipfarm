@@ -361,3 +361,13 @@ test("background games open on a hook: first payoff lands within seconds", () =>
     }
   }
 });
+
+test("long streams: HLS playlist → exact segment times for clip downloads", () => {
+  const { parseHlsPlaylist } = require("../dist/pipeline/longform");
+  const pl = parseHlsPlaylist("#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10.000,\n0.ts\n#EXTINF:10.000,\n1-muted.ts\n#EXTINF:4.5,\n2.ts\n#EXT-X-ENDLIST\n",
+    "https://cdn.example.com/abc/chunked/index-dvr.m3u8");
+  assert.deepEqual(pl.segments.map((s) => [s.uri.split("/").pop(), s.t0, s.t1]), [["0.ts", 0, 10000], ["1-muted.ts", 10000, 20000], ["2.ts", 20000, 24500]]);
+  assert.equal(pl.segments[0].uri, "https://cdn.example.com/abc/chunked/0.ts");
+  const fmp4 = parseHlsPlaylist('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2,\nseg1.m4s\n', "https://x.test/v/p.m3u8");
+  assert.equal(fmp4.init, "https://x.test/v/init.mp4");
+});

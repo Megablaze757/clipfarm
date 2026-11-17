@@ -11,7 +11,7 @@ import { generateWindows, targetCount } from "./pipeline/candidates";
 import { heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
 import { chatNominations, nominateMoments } from "./pipeline/moments";
 import { chatSpikes, type ChatSignal } from "./pipeline/chat";
-import { alignSection, buildZoneAudio, downloadAudioOnly, downloadSection, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
+import { alignSection, buildZoneAudio, downloadAudioOnly, downloadHlsSection, downloadSection, hlsPlaylist, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
 import { isSiteUrl } from "./pipeline/ingest";
 import { refineWithLLM } from "./pipeline/llm-scoring";
 import { snapBoundaries } from "./pipeline/boundaries";
@@ -229,6 +229,10 @@ export async function processProject(job: ProcessJob): Promise<void> {
     stage("thumbnails");
     const rows: (Record<string, unknown> | undefined)[] = new Array(picked.length);
     let posterFrom: { file: string; atMs: number } | null = null;
+    // Long stream: the HLS playlist once, then each clip fetches only its own
+    // 10-second segments (exact stream times). Non-HLS sites use yt-dlp sections.
+    const playlist = long ? await hlsPlaylist(long.url) : null;
+    if (long) stage(playlist ? `clip video: ${playlist.segments.length} HLS segments indexed` : "clip video: yt-dlp sections");
     await pool(picked.length, long ? 3 : 4, async (i) => {
       const c: Candidate = picked[i];
       const thumbPath = join(dir, `thumb_${i}.jpg`);
@@ -239,9 +243,19 @@ export async function processProject(job: ProcessJob): Promise<void> {
         const secPath = join(dir, `section_${i}.mp4`), secKey = `${prefix}/sections/cand_${i}.mp4`;
         const want = Math.max(0, c.t_in_ms - 20_000);
         try {
-          await downloadSection(long.url, want, c.t_out_ms + 20_000, secPath);
+          const t = Date.now();
+          let offset: number;
+          if (playlist) {
+            offset = await downloadHlsSection(playlist, want, c.t_out_ms + 20_000, dir, secPath);
+          } else {
+            await downloadSection(long.url, want, c.t_out_ms + 20_000, secPath);
+            offset = -1;
+          }
           const sec = await probe(secPath);
-          const offset = await alignSection(secPath, sec.durationMs, envelope, want);
+          // Never save an empty file as a clip's media.
+          if (!(sec.width > 0) || sec.durationMs < (c.t_out_ms - c.t_in_ms)) throw new Error(`section has no usable video (${sec.width}px, ${sec.durationMs} ms)`);
+          if (offset < 0) offset = await alignSection(secPath, sec.durationMs, envelope, want);
+          stage(`clip ${i}: ${(sec.durationMs / 1000).toFixed(0)} s of video in ${((Date.now() - t) / 1000).toFixed(1)} s`);
           await r2Upload(secKey, secPath, "video/mp4");
           await poster(secPath, Math.max(0, c.t_in_ms - offset + 1000), thumbPath).catch(() => {});
           await r2Upload(thumbKey, thumbPath, "image/jpeg").catch(() => {});
@@ -279,12 +293,17 @@ export async function processProject(job: ProcessJob): Promise<void> {
     if (insErr) throw new Error(`saving candidates: ${insErr.message}`);
 
     const posterPath = join(dir, "poster.jpg");
-    const pf = posterFrom as { file: string; atMs: number } | null;
-    if (long && pf) await poster(pf.file, pf.atMs, posterPath);
-    else await poster(input, Math.max(1000, info.durationMs * 0.05), posterPath, undefined, inputArgs);
-    await r2Upload(`${prefix}/thumbs/poster.jpg`, posterPath, "image/jpeg");
-    await writeFile(join(dir, "transcript.srt"), buildSrt(words));
-    await r2Upload(`${prefix}/artifacts/transcript.srt`, join(dir, "transcript.srt"), "application/x-subrip");
+    // Cover image + transcript file: nice to have — never fail a finished project over them.
+    try {
+      const pf = posterFrom as { file: string; atMs: number } | null;
+      if (long && pf) await poster(pf.file, pf.atMs, posterPath);
+      else if (!long) await poster(input, Math.max(1000, info.durationMs * 0.05), posterPath, undefined, inputArgs);
+      if (!long || pf) await r2Upload(`${prefix}/thumbs/poster.jpg`, posterPath, "image/jpeg");
+    } catch (e) { console.warn(`poster: ${(e as Error).message.slice(0, 200)}`); }
+    try {
+      await writeFile(join(dir, "transcript.srt"), buildSrt(words));
+      await r2Upload(`${prefix}/artifacts/transcript.srt`, join(dir, "transcript.srt"), "application/x-subrip");
+    } catch (e) { console.warn(`srt: ${(e as Error).message.slice(0, 200)}`); }
 
     // 6. Usage (§15.4) — idempotent per project.
     await supabase.from("usage_events").upsert({
