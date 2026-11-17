@@ -1,6 +1,6 @@
 import type { Candidate, Word } from "../lib/types";
 import { llm, parseJsonObject } from "../lib/worker";
-import { composite } from "./scoring";
+import { finalScore } from "./scoring";
 import { MIN_CLIP_MS } from "./boundaries";
 import { textOf } from "./text";
 
@@ -19,6 +19,7 @@ import { textOf } from "./text";
  */
 const SYSTEM = `You are judging candidate clips cut from a long podcast/stream, for TikTok, Reels and Shorts.
 Judge each excerpt as a STANDALONE clip seen by a stranger scrolling a feed.
+When an excerpt says the live chat reacted, that is real audience evidence: weigh it into emotion and shareability, but still judge whether a stranger would get it.
 Score every dimension 0-10 using these anchors (be harsh; most moments are 3-6):
 - hook: would the FIRST LINE stop the scroll? 9-10 bold claim/shocking number/conflict/"you're doing X wrong"; 5 decent intro; 0-2 filler, "so yeah", "anyway".
 - payoff: does it open a question or tension and RESOLVE it inside the clip? 9-10 setup→twist/punchline/answer; 5 informative but flat; 0-2 never resolves or resolves off-clip.
@@ -75,7 +76,7 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
     for (const c of cands) {
       if (c.features.scorer === "llm") continue;
       c.features.score_factor = UNREVIEWED_PENALTY;
-      c.score = Math.round(composite(c.subscores) * UNREVIEWED_PENALTY * 100) / 100;
+      c.score = finalScore(c);
       c.features.signals.push("not AI-reviewed");
     }
   }
@@ -84,7 +85,8 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
   async function judge(batch: Candidate[]): Promise<void> {
       const user = batch.map((c, k) => {
         const secs = Math.round((c.t_out_ms - c.t_in_ms) / 1000);
-        const hint = c.features.nominated ? ` (editor flagged: ${c.features.category ?? "moment"})` : "";
+        const chat = c.features.chat ? ` (live chat reacted: ${c.features.chat.kind}, ${c.features.chat.ratio}x normal rate — "${c.features.chat.sample.slice(0, 2).join('", "')}")` : "";
+        const hint = (c.features.nominated ? ` (editor flagged: ${c.features.category ?? "moment"})` : "") + chat;
         return `### id ${k} — ${secs}s${hint}\n${c.text.slice(0, 1600)}`;
       }).join("\n\n");
       const res = await llm(SYSTEM, user, 2600);
@@ -123,7 +125,7 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         if (typeof j.rationale === "string" && j.rationale.trim()) c.rationale = j.rationale.trim().split(/\s+/).slice(0, 12).join(" ");
         c.features.scorer = "llm";
         c.features.model = res!.model;
-        c.score = composite(s);
+        c.score = finalScore(c);
         refined++;
       }
   }

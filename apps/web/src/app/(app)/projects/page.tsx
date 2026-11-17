@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { StageRail } from '@/components/stage-rail'
 import { ErrorBox, Loading, isGuest, usePolling, useRequireSession, useSignInOn401 } from '@/components/use-session'
-import { api, ApiError, type Project } from '@/lib/api'
+import { api, ApiError, API_URL, authHeader, type Project } from '@/lib/api'
 import { uploadFile } from '@/lib/upload'
 import { supabase } from '@/lib/supabase'
 import { formatDuration, timeAgo } from '@/lib/tokens'
@@ -29,6 +29,23 @@ export default function ProjectsPage() {
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const chatRef = useRef<HTMLInputElement>(null)
+  const [chat, setChat] = useState<{ key: string; name: string } | null>(null)
+  const [chatBusy, setChatBusy] = useState(false)
+
+  async function onChat(file: File | undefined) {
+    if (!file) return
+    if (file.size > 50 * 1024 * 1024) { setFormError('Chat logs must be under 50 MB.'); return }
+    setChatBusy(true); setFormError(null)
+    try {
+      const res = await fetch(`${API_URL}/v1/chat?name=${encodeURIComponent(file.name.slice(0, 60))}`, {
+        method: 'PUT', body: file, headers: { 'Content-Type': 'text/plain', ...(await authHeader()) },
+      })
+      const j = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(j?.error?.message ?? `Upload failed (${res.status})`)
+      setChat({ key: j.key, name: file.name })
+    } catch (e) { setFormError((e as Error).message) } finally { setChatBusy(false); if (chatRef.current) chatRef.current.value = '' }
+  }
   const abortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
@@ -53,8 +70,9 @@ export default function ProjectsPage() {
   }, [session, load])
 
   async function create(source: { kind: 'upload'; r2_key: string } | { kind: 'url'; url: string }, title?: string) {
-    const options = { clip_durations: duration === 'auto' ? [] : [Number(duration)] }
+    const options = { clip_durations: duration === 'auto' ? [] : [Number(duration)], ...(chat ? { chat_key: chat.key } : {}) }
     const p = await api.post<Project>('/v1/projects', { source, title, options }, { 'Idempotency-Key': crypto.randomUUID() })
+    setChat(null)
     router.push(`/projects/view?id=${p.id}`)
   }
 
@@ -129,6 +147,18 @@ export default function ProjectsPage() {
             </>
           )}
           <input ref={fileRef} type="file" className="hidden" accept=".mp4,.mov,.mkv,.webm,.mp3,.wav,.m4a,.flac,video/*,audio/*" onChange={(e) => onFile(e.target.files?.[0])} />
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+          <span className="font-semibold text-slate-300">Stream chat (optional):</span>
+          {chat ? (
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-200">💬 {chat.name} <button onClick={() => setChat(null)} className="ml-1 underline">remove</button></span>
+          ) : (
+            <button onClick={() => chatRef.current?.click()} disabled={chatBusy} className="px-2.5 py-1 rounded-lg border border-dashed border-slate-700 hover:border-slate-500 text-slate-300">
+              {chatBusy ? 'Uploading…' : '+ Add chat log'}
+            </button>
+          )}
+          <span className="text-[11px] text-slate-500">Add the stream&apos;s chat replay and the engine finds the moments chat went crazy for. JSON from TwitchDownloader or chat-downloader, YouTube live-chat JSON, or text lines like “[1:02:03] name: message”.</span>
+          <input ref={chatRef} type="file" className="hidden" accept=".json,.jsonl,.txt,.log,.csv,application/json,text/plain" onChange={(e) => onChat(e.target.files?.[0])} />
         </div>
         {formError && <ErrorBox message={formError} />}
       </section>

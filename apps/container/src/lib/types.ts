@@ -69,6 +69,10 @@ export interface Candidate {
     score_factor?: number;
     /** Laughter/applause-like events inside or right after the clip. */
     reactions?: number;
+    /** The live chat's biggest reaction to this clip (chat.ts). */
+    chat?: { z: number; ratio: number; kind: string; sample: string[] };
+    /** Multiplier from a chat spike (1 = none, up to 1.3). */
+    chat_boost?: number;
   };
   rationale: string;
 }

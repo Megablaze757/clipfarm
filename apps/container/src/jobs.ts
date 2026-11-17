@@ -9,7 +9,9 @@ import { localChunksUsed, pool, transcribe } from "./pipeline/asr";
 import { sentences } from "./pipeline/text";
 import { generateWindows, targetCount } from "./pipeline/candidates";
 import { heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
-import { nominateMoments } from "./pipeline/moments";
+import { chatNominations, nominateMoments } from "./pipeline/moments";
+import { chatSpikes, parseChat, type ChatSignal } from "./pipeline/chat";
+import { readFile } from "node:fs/promises";
 import { refineWithLLM } from "./pipeline/llm-scoring";
 import { snapBoundaries } from "./pipeline/boundaries";
 import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
@@ -27,7 +29,7 @@ export interface ProcessJob {
   projectId: string;
   tenantId: string;
   source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string };
-  options: { language?: string; clip_durations?: number[] | "auto"; max_clips?: number | null };
+  options: { language?: string; clip_durations?: number[] | "auto"; max_clips?: number | null; chat_key?: string };
   plan: { id: string; clipsPerSource: number | null; maxSourceMinutes: number; remainingMinutes: number };
 }
 
@@ -133,15 +135,32 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const speechMs = words.reduce((s, w) => s + (w.t1 - w.t0), 0);
     const globalRate = words.length / Math.max(1, speechMs / 1000);
     const reactions = reactionEvents(words, envelope);
-    const scored = windows.map((w) => heuristicScore(words, envelope, w, globalRate, reactions));
+
+    // Live chat, when the user added a chat log: bursts mark the moments the
+    // audience reacted to (chat.ts). Never fatal — a bad file just means no chat signal.
+    let chat: ChatSignal | null = null;
+    if (job.options.chat_key) {
+      try {
+        const chatPath = join(dir, "chat.log");
+        await r2DownloadParallel(job.options.chat_key, chatPath);
+        chat = chatSpikes(parseChat(await readFile(chatPath, "utf8")), info.durationMs);
+        stage(`chat: ${chat.messages} messages, ${chat.spikes.length} spikes`);
+      } catch (e) {
+        console.warn(`chat log unusable: ${(e as Error).message.slice(0, 200)}`);
+      }
+    }
+    const scored = windows.map((w) => heuristicScore(words, envelope, w, globalRate, reactions, chat));
 
     // Engine v2, pass 1: an AI reads the whole transcript and nominates the
     // moments an editor would cut. They join the heuristic windows below.
     await setStatus(projectId, "scoring", { progress: 55 });
     stage("nominate");
-    const nominations = await nominateMoments(words, sents);
+    const aiNominations = await nominateMoments(words, sents, 6, chat);
+    // The biggest chat spikes are candidates too, unless the AI already took that moment.
+    const nominations = [...aiNominations, ...chatNominations(sents, chat).filter((c) =>
+      !aiNominations.some((m) => Math.max(m.s0, c.s0) <= Math.min(m.s1, c.s1)))];
     const nominated = nominations.map((m) => {
-      const c = heuristicScore(words, envelope, { i0: sents[m.s0].i0, i1: sents[m.s1].i1, t0: sents[m.s0].t0, t1: sents[m.s1].t1 }, globalRate, reactions);
+      const c = heuristicScore(words, envelope, { i0: sents[m.s0].i0, i1: sents[m.s1].i1, t0: sents[m.s0].t0, t1: sents[m.s1].t1 }, globalRate, reactions, chat);
       c.features.nominated = true;
       c.features.category = m.category;
       if (m.hook) c.features.hook_line = m.hook;
@@ -207,7 +226,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
       // review_proxy_key = the media the editor and shortlist play.
       progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: mediaKey,
       candidate_count: rows.length, top_score: picked[0]?.score ?? null,
-      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only" },
+      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only", ...(chat ? { chat: `${chat.messages} messages, ${chat.spikes.length} spikes` } : {}) },
     });
     stage("ready");
     // If a working copy replaced the upload, the original isn't needed: delete

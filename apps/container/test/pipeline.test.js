@@ -269,3 +269,40 @@ test("background games: web copy matches, every game runs a minute cleanly and f
     console.log(`  ${id}: 60 s of footage in ${(ms / 1000).toFixed(1)} s`);
   }
 });
+
+test("chat: parses common chat-log formats", () => {
+  const { parseChat } = require("../dist/pipeline/chat");
+  const td = JSON.stringify({ comments: [{ content_offset_seconds: 12.5, message: { body: "KEKW" } }, { content_offset_seconds: 3, message: { body: "hi" } }] });
+  assert.deepEqual(parseChat(td).map((m) => [m.t, m.text]), [[3000, "hi"], [12500, "KEKW"]]);
+  const cd = JSON.stringify([{ time_in_seconds: 61, message: "W" }]);
+  assert.deepEqual(parseChat(cd).map((m) => m.t), [61000]);
+  const yt = JSON.stringify({ replayChatItemAction: { videoOffsetTimeMsec: "4200", actions: [{ addChatItemAction: { item: { liveChatTextMessageRenderer: { message: { runs: [{ text: "no way" }] } } } } }] } });
+  assert.deepEqual(parseChat(yt + "\n" + yt).map((m) => [m.t, m.text]), [[4200, "no way"], [4200, "no way"]]);
+  const txt = "[1:02:03] alice: LMAO\n00:00:05 bob: hello there\n12.5,carol,POG";
+  assert.deepEqual(parseChat(txt).map((m) => m.t), [5000, 12500, 3723000]);
+});
+
+test("chat: finds a burst against the stream's own baseline and boosts that clip", () => {
+  const { chatSpikes, chatSpikeIn } = require("../dist/pipeline/chat");
+  const { heuristicScore } = require("../dist/pipeline/scoring");
+  const msgs = [];
+  let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let t = 0; t < 1_800_000; t += 400 + r() * 1600) msgs.push({ t, text: ["hi", "true", "what game is this", "lol", "nice"][Math.floor(r() * 5)] });
+  for (let k = 0; k < 160; k++) msgs.push({ t: 905_000 + r() * 6000, text: k % 3 ? "KEKW" : "LMAOOO" }); // something funny at ~15:00
+  msgs.sort((a, b) => a.t - b.t);
+  const sig = chatSpikes(msgs, 1_800_000);
+  assert.ok(sig.spikes.length >= 1);
+  const top = [...sig.spikes].sort((a, b) => b.z - a.z)[0];
+  assert.equal(top.kind, "laugh");
+  assert.ok(Math.abs(top.peak - 911_000) < 4000, `peak ${top.peak}`);
+  assert.ok(top.t < top.peak && top.peak - top.t <= 10_000);
+  assert.ok(chatSpikeIn(sig, 880_000, 910_000));
+  assert.equal(chatSpikeIn(sig, 100_000, 130_000), null);
+  // The same words score higher with the chat spike than without.
+  const words = []; for (let i = 0; i < 80; i++) words.push({ w: i % 10 === 9 ? "end." : "word", t0: 880_000 + i * 380, t1: 880_000 + i * 380 + 300, conf: 0.9 });
+  const w = { i0: 0, i1: 79, t0: words[0].t0, t1: words[79].t1 };
+  const env = new Float32Array(20_000).fill(0.2);
+  const plain = heuristicScore(words, env, w, 2.6, [], null), withChat = heuristicScore(words, env, w, 2.6, [], sig);
+  assert.ok(withChat.score > plain.score + 3, `${withChat.score} vs ${plain.score}`);
+  assert.ok(withChat.features.badges.some((b) => b.includes("Chat")));
+});

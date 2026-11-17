@@ -2,6 +2,7 @@ import type { Candidate, Envelope, Subscores, Word } from "../lib/types";
 import { FRAME_MS } from "../lib/types";
 import { bare, endsSentence, jaccard, textOf, tokens } from "./text";
 import { PRONOUNS, type Window } from "./candidates";
+import { CHAT_LABEL, chatSpikeIn, chatStrength, type ChatSignal } from "./chat";
 
 /**
  * Composite weights (engine v2). Grounded in what's actually evidenced:
@@ -105,7 +106,7 @@ export function reactionEvents(words: Word[], env: Envelope): number[] {
 }
 
 /** Heuristic sub-scores. Always computed; the LLM refines them on top (cold-start safe, FR-6.6). */
-export function heuristicScore(words: Word[], env: Envelope, w: Window, globalRate: number, reactions: number[] = []): Candidate {
+export function heuristicScore(words: Word[], env: Envelope, w: Window, globalRate: number, reactions: number[] = [], chat: ChatSignal | null = null): Candidate {
   const text = textOf(words, w.i0, w.i1);
   const signals: string[] = [];
   const badges: string[] = [];
@@ -169,17 +170,34 @@ export function heuristicScore(words: Word[], env: Envelope, w: Window, globalRa
   const reaction = clamp01(inside.length * 0.25 + (atEnd ? 0.35 : 0));
   if (inside.length) { signals.push(atEnd ? "big reaction at the payoff" : "audience reaction"); badges.push("😂 Reaction"); }
 
+  // Live chat: a burst of messages/emotes right after (or during) the moment.
+  const spike = chatSpikeIn(chat, w.t0, w.t1);
+  const chatS = chatStrength(spike);
+  if (spike && chatS > 0) {
+    signals.unshift(`${CHAT_LABEL[spike.kind]} (${spike.ratio}x normal)`);
+    badges.unshift(spike.kind === "laugh" ? "💬 Chat lost it" : spike.kind === "hype" ? "💬 Chat hype" : "💬 Chat spike");
+  }
+
   const subscores: Subscores = {
     hook: clamp01(hook), self_contained: sc.score, complete: clamp01(complete), energy, structure,
-    emotion, shareability, reaction, novelty: 1,
+    emotion, shareability, reaction: Math.max(reaction, chatS), novelty: 1,
   };
+  const chatBoost = 1 + 0.3 * chatS;
   return {
     i0: w.i0, i1: w.i1, t_in_ms: w.t0, t_out_ms: w.t1, text,
     subscores,
-    score: composite(subscores),
-    features: { badges: badges.slice(0, 3), signals, unresolved: sc.unresolved, scorer: "heuristic", reactions: inside.length },
+    score: Math.round(composite(subscores) * chatBoost * 100) / 100,
+    features: {
+      badges: badges.slice(0, 3), signals, unresolved: sc.unresolved, scorer: "heuristic", reactions: inside.length,
+      ...(spike && chatS > 0 ? { chat: { z: spike.z, ratio: spike.ratio, kind: spike.kind, sample: spike.sample }, chat_boost: chatBoost } : {}),
+    },
     rationale: templateRationale(signals, sc.unresolved),
   };
+}
+
+/** The ranking score: composite × AI-review factor × chat boost. */
+export function finalScore(c: Candidate): number {
+  return Math.round(composite(c.subscores) * (c.features.score_factor ?? 1) * (c.features.chat_boost ?? 1) * 100) / 100;
 }
 
 export function composite(s: Subscores): number {
@@ -223,7 +241,7 @@ export function selectMMR(cands: Candidate[], n: number, lambda = 0.35): Candida
     if (best < 0) break;
     const [chosen] = pool.splice(best, 1);
     chosen.c.subscores.novelty = clamp01(1 - bestSim);
-    chosen.c.score = Math.round(composite(chosen.c.subscores) * (chosen.c.features.score_factor ?? 1) * 100) / 100;
+    chosen.c.score = finalScore(chosen.c);
     picked.push(chosen);
   }
   return picked.map((p) => p.c).sort((a, b) => b.score - a.score);

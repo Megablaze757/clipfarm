@@ -8,7 +8,7 @@ import { checkout, portal, webhook } from "./billing";
 import { internalComplete, internalDb, internalJob, internalTranscribe } from "./internal";
 import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN_FLIGHT, type ClipEdits, type ProjectRow } from "./jobs";
 import { PLANS, PRESETS } from "./plans";
-import { checkBackground, listBackgrounds, uploadBackground } from "./backgrounds";
+import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import { modelChain } from "../pocketathlete/index";
 
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[]) => Promise<Response>;
@@ -55,6 +55,9 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["GET", /^\/v1\/backgrounds$/, authed(async (_r, env, c) => listBackgrounds(env, c))],
   ["PUT", /^\/v1\/backgrounds$/, authed(async (r, env, c) => uploadBackground(r, env, c))],
 
+  // Live-chat logs for chat analysis
+  ["PUT", /^\/v1\/chat$/, authed(async (r, env, c) => uploadChat(r, env, c))],
+
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],
   ["POST", /^\/v1\/brandkits$/, authed(createBrandkit)],
@@ -92,7 +95,7 @@ export async function handleClipper(req: Request, env: Env, ctx: ExecutionContex
   try {
     // Without the R2 binding or a job runner, say so plainly instead of a
     // TypeError 500 — PocketAthlete and the rest of /v1 keep working either way.
-    const needsStorage = /^\/v1\/(upload\/|media$|internal\/r2|backgrounds$)/.test(pathname) || (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname));
+    const needsStorage = /^\/v1\/(upload\/|media$|internal\/r2|backgrounds$|chat$)/.test(pathname) || (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname));
     if (needsStorage && !env.R2_BUCKET) {
       throw new ApiError(503, "E_PROCESSING_UNAVAILABLE",
         "Video storage isn't switched on for this Worker yet: add an R2 bucket binding named R2_BUCKET (bucket clipper-prod).");
@@ -142,7 +145,7 @@ async function createProject(req: Request, env: Env, caller: Caller, _p: string[
   const b = await body<{
     title?: string;
     source?: { kind?: string; r2_key?: string; url?: string };
-    options?: { language?: string; clip_durations?: number[]; max_clips?: number; template_id?: string };
+    options?: { language?: string; clip_durations?: number[]; max_clips?: number; template_id?: string; chat_key?: string };
   }>(req);
   const idem = req.headers.get("Idempotency-Key")?.slice(0, 120) || null;
   if (idem) {
@@ -168,12 +171,21 @@ async function createProject(req: Request, env: Env, caller: Caller, _p: string[
     throw new ApiError(403, "E_TENANT_QUOTA", `You've used all ${caller.plan.monthlyMinutes} source minutes on the ${caller.plan.label} plan this month. Upgrade to keep going.`);
   }
 
+  // Optional live-chat log (uploaded via PUT /v1/chat) — powers chat analysis.
+  let chat_key: string | null = null;
+  if (b.options?.chat_key) {
+    chat_key = String(b.options.chat_key);
+    if (!chat_key.startsWith(`${caller.tenantId}/chat/`) || chat_key.includes("..")) throw new ApiError(403, "E_FORBIDDEN", "not your chat log");
+    if (!(await env.R2_BUCKET.head(chat_key))) throw new ApiError(400, "E_VALIDATION", "the chat log upload did not finish — add it again");
+  }
+
   const durations = (b.options?.clip_durations ?? []).map(Number).filter((n) => [15, 30, 60, 90].includes(n));
   const options = {
     language: typeof b.options?.language === "string" ? b.options.language.slice(0, 8) : "auto",
     clip_durations: durations.length ? durations : "auto",
     max_clips: Math.min(Math.max(Number(b.options?.max_clips) || 0, 0), 40) || null,
     template_id: b.options?.template_id ?? null,
+    ...(chat_key ? { chat_key } : {}),
   };
   const title = String(b.title ?? "").trim().slice(0, 200) ||
     (source_kind === "url" ? new URL(source_uri).hostname : "Untitled upload");

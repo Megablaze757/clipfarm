@@ -72,3 +72,18 @@ export async function listBackgrounds(env: Env, caller: Caller): Promise<Respons
     uploads,
   });
 }
+
+/**
+ * PUT /v1/chat?name=… — a stream's chat log (JSON or timestamped text, ≤ 50 MB),
+ * attached to a project as options.chat_key for chat analysis.
+ */
+export async function uploadChat(req: Request, env: Env, caller: Caller): Promise<Response> {
+  requireEditor(caller);
+  const size = Number(req.headers.get("content-length") ?? "0");
+  if (!(size > 0)) throw new ApiError(411, "E_VALIDATION", "content-length required");
+  if (size > 50 * 1024 * 1024) throw new ApiError(413, "E_INGEST_TOO_LARGE", "chat logs must be under 50 MB");
+  const name = (new URL(req.url).searchParams.get("name") ?? "chat").replace(/[^\w .-]/g, "").slice(0, 60) || "chat";
+  const key = `${caller.tenantId}/chat/${crypto.randomUUID()}.log`;
+  await env.R2_BUCKET.put(key, req.body, { httpMetadata: { contentType: "text/plain; charset=utf-8" }, customMetadata: { name } });
+  return json({ key, name }, 201);
+}
