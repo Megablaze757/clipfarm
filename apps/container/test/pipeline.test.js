@@ -248,3 +248,24 @@ test("short moments are extended by whole sentences to at least 15 s", () => {
   assert.ok(/[.?!]$/.test(W[i1].w), "ends on a sentence end");
   assert.ok(i0 === 0 || /[.?!]$/.test(W[i0 - 1].w), "starts on a sentence start");
 });
+
+test("background games: web copy matches, every game runs a minute cleanly and fast", async () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const a = fs.readFileSync(path.join(__dirname, "../src/pipeline/games.ts"), "utf8");
+  const b = fs.readFileSync(path.join(__dirname, "../../web/src/lib/games.ts"), "utf8");
+  assert.equal(a, b, "apps/web/src/lib/games.ts must be a copy of apps/container/src/pipeline/games.ts");
+  const { GAMES, GAME_W, GAME_H, renderGame } = require("../dist/pipeline/games");
+  for (const id of Object.keys(GAMES)) {
+    let frames = 0, lit = 0;
+    const t0 = Date.now();
+    await renderGame(id, 12345, 30, 30 * 60, (buf) => {
+      assert.equal(buf.length, GAME_W * GAME_H * 3);
+      if (++frames % 300 === 0) { let s = 0; for (let i = 0; i < buf.length; i += 97) s += buf[i]; lit += s > 0 ? 1 : 0; }
+    });
+    const ms = Date.now() - t0;
+    assert.equal(frames, 1800, id);
+    assert.ok(lit >= 5, `${id} draws something`);
+    assert.ok(ms < 60_000, `${id} renders a minute in under real time (${ms} ms)`);
+    console.log(`  ${id}: 60 s of footage in ${(ms / 1000).toFixed(1)} s`);
+  }
+});

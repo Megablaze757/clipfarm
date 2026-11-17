@@ -2,7 +2,7 @@
 Times an MP4 export through the LIVE app as a guest: takes the top clip of a
 project, starts a render, and polls until the MP4 is ready.
 
-    python3 export_test.py <project-id> [preset]
+    python3 export_test.py <project-id> [preset] [caption-style] [background-id]
 """
 import json
 import os
@@ -26,6 +26,15 @@ def main():
     preset = sys.argv[2] if len(sys.argv) > 2 else "tiktok"
     cand = call("GET", f"/v1/projects/{pid}/clips?limit=1")["candidates"][0]
     clip = call("POST", "/v1/clips", {"candidate_id": cand["id"]})
+    style = sys.argv[3] if len(sys.argv) > 3 else None
+    bg = sys.argv[4] if len(sys.argv) > 4 else None
+    if style or bg:
+        patch = {}
+        if style:
+            patch["captions"] = {"enabled": True, "style": style}
+        if bg:
+            patch["background"] = {"kind": "builtin", "id": bg}
+        call("PATCH", f"/v1/clips/{clip['id']}", patch)
     secs = (cand["t_out_ms"] - cand["t_in_ms"]) / 1000
     t0 = time.time()
     job = call("POST", f"/v1/clips/{clip['id']}/render", {"preset": preset})
@@ -41,7 +50,7 @@ def main():
     total = time.time() - t0
     print(f"RESULT {r['status']}: {secs:.0f}s clip exported as {preset} in {total:.0f}s "
           f"(error: {r.get('error_code')} {str(r.get('error_detail'))[:200]})" if r["status"] != "completed"
-          else f"RESULT completed: {secs:.0f}s clip exported as {preset} in {total:.0f}s")
+          else f"RESULT completed: {secs:.0f}s clip exported as {preset} in {total:.0f}s\nDOWNLOAD {r.get('download_url')}")
 
 
 if __name__ == "__main__":

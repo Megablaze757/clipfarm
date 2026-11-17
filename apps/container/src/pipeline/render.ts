@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ffmpeg, probe } from "../lib/proc";
+import { ffmpeg, ffmpegFromStdin, probe } from "../lib/proc";
+import { GAME_H, GAME_W, GAMES, renderGame } from "./games";
 import { buildAss, type CapWord } from "./captions";
 
 /** Grid proxy (§7.1): 9:16 centre crop, 360×640, CRF 30 — ~15 % of a final's cost. */
@@ -46,7 +47,7 @@ export function builtinBackground(id: string, durS: number, fps: number): string
       return `cellauto=s=135x120:rule=30:rate=${fps}:scroll=1:full=1,negate,format=rgb24,colorchannelmixer=rr=0.1:gg=0.9:bb=0.6,trim=duration=${d}`;
     case "neon_life":
     default:
-      return `life=s=135x120:mold=20:rate=${fps}:ratio=0.18:death_color=#140026:life_color=#00f0ff:mold_color=#ff2d95,trim=duration=${d}`;
+      return `life=s=135x120:mold=20:rate=${fps}:ratio=0.18:death_color=#140026:life_color=#00f0ff:mold_color=#2a0a3a,trim=duration=${d}`;
   }
 }
 /** Where an uploaded background lives: an R2 key, or (tests) a local path. */
@@ -92,7 +93,17 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const bg = spec.background && spec.background.kind !== "none" ? spec.background : null;
   const topH = bg ? Math.round(h / 4) * 2 : h;
   const bgArgs: string[] = [];
-  if (bg?.kind === "builtin") {
+  const isGame = bg?.kind === "builtin" && !!GAMES[bg.id];
+  if (bg?.kind === "builtin" && isGame) {
+    // Our own gameplay: simulate, pipe the frames into a quick lossless-ish encode.
+    const gameFile = join(dir, "game.mp4"), gfps = Math.min(30, spec.encode.fps);
+    await ffmpegFromStdin(
+      ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${GAME_W}x${GAME_H}`, "-r", String(gfps), "-i", "pipe:0",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "14", "-pix_fmt", "yuv420p", gameFile],
+      (write) => renderGame(bg.id, hashOf(spec.trim.in_ms + bg.id), gfps, Math.ceil((durS + 0.5) * gfps), write),
+    );
+    bgArgs.push("-i", gameFile);
+  } else if (bg?.kind === "builtin") {
     bgArgs.push("-f", "lavfi", "-i", builtinBackground(bg.id, durS, spec.encode.fps));
   } else if (bg?.kind === "upload") {
     // Loop the footage and start somewhere different each export.
@@ -120,7 +131,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   v = "[v0]";
   if (bg) {
     const bh = h - topH;
-    filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}[bgv]`);
+    filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" && !isGame ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}[bgv]`);
     filters.push(`[v0][bgv]vstack=inputs=2:shortest=1[vs]`);
     v = "[vs]";
   }

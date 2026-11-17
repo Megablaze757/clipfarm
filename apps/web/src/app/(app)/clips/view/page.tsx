@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import { ErrorBox, Loading, useRequireSession, useSignInOn401 } from '@/components/use-session'
 import { api, API_URL, authHeader, type Plan } from '@/lib/api'
 import { autoReframe, cxAt, type Keyframe } from '@/lib/reframe'
+import { GAMES } from '@/lib/games'
+import { GamePreview } from '@/components/game-preview'
 import { formatPrecise } from '@/lib/tokens'
 
 interface Word { i: number; w: string; t0: number; t1: number; speaker?: string }
@@ -301,6 +303,7 @@ function Studio() {
               ) : <div className="absolute inset-0 grid place-items-center text-xs text-slate-500 p-6 text-center">The review video is still being prepared.</div>}
               {split && (
                 <div className="absolute inset-x-0 bottom-0 overflow-hidden" style={{ height: frameH - topH, background: state.background.kind === 'builtin' ? BUILTIN_PREVIEW[state.background.id] : '#000' }}>
+                  {state.background.kind === 'builtin' && GAMES[state.background.id] && <GamePreview id={state.background.id} className="w-full h-full object-cover" />}
                   {state.background.kind === 'upload' && (() => {
                     const key = (state.background as { key: string }).key
                     const url = bgList?.uploads.find((u) => u.key === key)?.preview_url

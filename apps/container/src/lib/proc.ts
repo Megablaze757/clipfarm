@@ -41,6 +41,36 @@ export function run(
   });
 }
 
+/**
+ * FFmpeg reading raw frames from us on stdin (`-i pipe:0`): `produce` writes
+ * them through `write`, which waits whenever FFmpeg's input buffer is full.
+ */
+export function ffmpegFromStdin(
+  args: string[],
+  produce: (write: (chunk: Uint8Array) => Promise<void>) => Promise<void>,
+  timeoutMs = 10 * 60 * 1000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", ["-hide_banner", "-y", ...args], { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "", failed = false;
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stderr.on("data", (c: Buffer) => { stderr = (stderr + c.toString()).slice(-20_000); });
+    child.on("error", (e) => { failed = true; clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failed) return;
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().split("\n").slice(-6).join(" | ")}`));
+    });
+    child.stdin.on("error", () => { /* surfaced through 'close' */ });
+    const write = (chunk: Uint8Array) => new Promise<void>((res) => {
+      if (child.stdin.destroyed) return res();
+      if (child.stdin.write(chunk)) res(); else child.stdin.once("drain", () => res());
+    });
+    produce(write).then(() => child.stdin.end(), (e) => { failed = true; child.kill("SIGKILL"); reject(e); });
+  });
+}
+
 /** FFmpeg with one retry on failure (§12.6). */
 export async function ffmpeg(args: string[], timeoutMs = 60 * 60 * 1000): Promise<{ stdout: string; stderr: string }> {
   const full = ["-hide_banner", "-nostdin", "-y", ...args];
