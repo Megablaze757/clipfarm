@@ -1,7 +1,7 @@
 import type { Env } from "./env";
 import { dbCount, dbJson, dbOne, dbPatch, rpc } from "./db";
 import { dispatchToContainer } from "./container";
-import { planFor, PRESETS } from "./plans";
+import { planFor, planForTenant, PRESETS } from "./plans";
 
 export const IN_FLIGHT = ["transcoding", "transcribing", "analyzing", "candidates", "scoring"];
 
@@ -35,7 +35,7 @@ export async function dispatchProject(env: Env, projectId: string): Promise<"dis
   const project = await dbOne<ProjectRow>(env, `projects?id=eq.${projectId}&deleted_at=is.null&select=*`);
   if (!project || project.status !== "queued") return "skipped";
   const tenant = await dbOne<{ plan: string }>(env, `tenants?id=eq.${project.tenant_id}&select=plan`);
-  const plan = planFor(tenant?.plan);
+  const plan = planForTenant(project.tenant_id, tenant?.plan);
   const running = await dbCount(env,
     `projects?tenant_id=eq.${project.tenant_id}&deleted_at=is.null&status=in.(${IN_FLIGHT.join(",")})&select=id`);
   if (running >= plan.concurrentJobs) return "waiting";
@@ -48,7 +48,7 @@ export async function dispatchProject(env: Env, projectId: string): Promise<"dis
 /** What the processing job needs. Also served to GitHub runners at /v1/internal/jobs/process/{id}. */
 export async function processPayload(env: Env, project: ProjectRow) {
   const tenant = await dbOne<{ plan: string }>(env, `tenants?id=eq.${project.tenant_id}&select=plan`);
-  const plan = planFor(tenant?.plan);
+  const plan = planForTenant(project.tenant_id, tenant?.plan);
   const used = await minutesUsed(env, project.tenant_id);
   return {
     projectId: project.id,

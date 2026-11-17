@@ -24,6 +24,13 @@ export function planFor(id: string | null | undefined): Plan {
   return PLANS[(id ?? "free") as Plan["id"]] ?? PLANS.free;
 }
 
+/** The shared no-account testing workspace. */
+export const GUEST_TENANT = "00000000-0000-4000-8000-00000000c11b";
+/** Testing account: no monthly minute cap, sources up to 48 h (jobs run on free GitHub runners). */
+export const guestPlan = (): Plan => ({ ...planFor("creator"), label: "Guest (testing)", monthlyMinutes: 1_000_000, concurrentJobs: 5, maxSourceMinutes: 48 * 60 });
+/** A tenant's plan — the guest workspace gets its testing limits everywhere, including on the runner. */
+export const planForTenant = (tenantId: string, id: string | null | undefined): Plan => (tenantId === GUEST_TENANT ? guestPlan() : planFor(id));
+
 export function priceFor(env: Env, plan: Plan["id"]): string | undefined {
   if (plan === "creator") return env.CLIPPER_PRICE_CREATOR;
   if (plan === "team") return env.CLIPPER_PRICE_TEAM;

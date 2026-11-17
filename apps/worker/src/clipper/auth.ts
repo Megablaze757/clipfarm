@@ -20,7 +20,8 @@ export interface Caller {
  * no watermark), shared by everyone with the link. On until
  * CLIPPER_GUEST_MODE = "off" is set on the Worker.
  */
-export const GUEST_TENANT = "00000000-0000-4000-8000-00000000c11b";
+export { GUEST_TENANT } from "./plans";
+import { GUEST_TENANT, guestPlan } from "./plans";
 let guestReady = false;
 
 async function guestCaller(env: Env): Promise<Caller> {
@@ -32,8 +33,7 @@ async function guestCaller(env: Env): Promise<Caller> {
     });
     guestReady = true;
   }
-  // Testing account: no monthly minute cap (jobs run on free GitHub runners).
-  return { userId: "", email: "", tenantId: GUEST_TENANT, role: "owner", plan: { ...planFor("creator"), label: "Guest (testing)", monthlyMinutes: 1_000_000, concurrentJobs: 5, maxSourceMinutes: 48 * 60 }, guest: true };
+  return { userId: "", email: "", tenantId: GUEST_TENANT, role: "owner", plan: guestPlan(), guest: true };
 }
 
 const guestAllowed = (env: Env) => (env.CLIPPER_GUEST_MODE ?? "on").trim().toLowerCase() !== "off";
