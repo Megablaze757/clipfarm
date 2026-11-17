@@ -8,6 +8,7 @@ import { checkout, portal, webhook } from "./billing";
 import { internalComplete, internalDb, internalJob, internalTranscribe } from "./internal";
 import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN_FLIGHT, type ClipEdits, type ProjectRow } from "./jobs";
 import { PLANS, PRESETS } from "./plans";
+import { checkBackground, listBackgrounds, uploadBackground } from "./backgrounds";
 import { modelChain } from "../pocketathlete/index";
 
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[]) => Promise<Response>;
@@ -50,6 +51,10 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["POST", new RegExp(`^/v1/clips/${UUID}/render$`), authed(renderClip)],
   ["GET", new RegExp(`^/v1/renders/${UUID}$`), authed(getRender)],
 
+  // Split-screen background footage
+  ["GET", /^\/v1\/backgrounds$/, authed(async (_r, env, c) => listBackgrounds(env, c))],
+  ["PUT", /^\/v1\/backgrounds$/, authed(async (r, env, c) => uploadBackground(r, env, c))],
+
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],
   ["POST", /^\/v1\/brandkits$/, authed(createBrandkit)],
@@ -87,7 +92,7 @@ export async function handleClipper(req: Request, env: Env, ctx: ExecutionContex
   try {
     // Without the R2 binding or a job runner, say so plainly instead of a
     // TypeError 500 — PocketAthlete and the rest of /v1 keep working either way.
-    const needsStorage = /^\/v1\/(upload\/|media$|internal\/r2)/.test(pathname) || (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname));
+    const needsStorage = /^\/v1\/(upload\/|media$|internal\/r2|backgrounds$)/.test(pathname) || (req.method === "POST" && /^\/v1\/(projects|clips\/[^/]+\/render)$/.test(pathname));
     if (needsStorage && !env.R2_BUCKET) {
       throw new ApiError(503, "E_PROCESSING_UNAVAILABLE",
         "Video storage isn't switched on for this Worker yet: add an R2 bucket binding named R2_BUCKET (bucket clipper-prod).");
@@ -312,7 +317,7 @@ async function getClip(_r: Request, env: Env, caller: Caller, p: string[]): Prom
 async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
   requireEditor(caller);
   const clip = await ownClip(env, caller, p[0]);
-  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; template_id?: string; title_overlay?: string; status?: string }>(req);
+  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; background?: unknown; template_id?: string; title_overlay?: string; status?: string }>(req);
   const t_in = b.t_in_ms != null ? Math.round(Number(b.t_in_ms)) : clip.t_in_ms;
   const t_out = b.t_out_ms != null ? Math.round(Number(b.t_out_ms)) : clip.t_out_ms;
   const dur = t_out - t_in;
@@ -320,6 +325,8 @@ async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): P
   const edits: ClipEdits = { ...(clip.edits ?? {}) };
   if (b.captions) edits.captions = { ...(edits.captions ?? {}), ...b.captions, edits: (b.captions.edits ?? edits.captions?.edits ?? []).slice(0, 2000) };
   if (b.layout) edits.layout = { ...(edits.layout ?? {}), ...b.layout, keyframes: (b.layout.keyframes ?? edits.layout?.keyframes ?? []).slice(0, 60) };
+  const bg = await checkBackground(env, caller, b.background);
+  if (bg) edits.background = bg;
   if (b.template_id !== undefined) edits.template_id = b.template_id;
   if (b.title_overlay !== undefined) edits.title_overlay = String(b.title_overlay).slice(0, 80);
   const patch: Record<string, unknown> = { t_in_ms: t_in, t_out_ms: t_out, edits, updated_at: new Date().toISOString() };

@@ -3,7 +3,7 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { ErrorBox, Loading, useRequireSession, useSignInOn401 } from '@/components/use-session'
-import { api, type Plan } from '@/lib/api'
+import { api, API_URL, authHeader, type Plan } from '@/lib/api'
 import { autoReframe, cxAt, type Keyframe } from '@/lib/reframe'
 import { formatPrecise } from '@/lib/tokens'
 
@@ -29,6 +29,17 @@ interface EditState {
   aspect: string
   keyframes: Keyframe[]
   overlay: string
+  background: Background
+}
+
+type Background = { kind: 'none' } | { kind: 'builtin'; id: string } | { kind: 'upload'; key: string }
+interface BackgroundList { builtin: { id: string; name: string }[]; uploads: { key: string; name: string; preview_url: string | null }[] }
+/** CSS stand-ins for the generated backgrounds (the MP4 gets the real thing). */
+const BUILTIN_PREVIEW: Record<string, string> = {
+  neon_life: 'radial-gradient(circle at 30% 40%, #00f0ff 0 6%, transparent 7%), radial-gradient(circle at 70% 60%, #ff2d95 0 5%, transparent 6%), #140026',
+  fractal_zoom: 'radial-gradient(circle at 50% 50%, #000 0 18%, #3b0ca3 30%, #f72585 55%, #4cc9f0 80%)',
+  colour_flow: 'linear-gradient(135deg, #ff2d95, #7a00ff, #00e5ff, #00ff88, #ffd000)',
+  pixel_rain: 'repeating-linear-gradient(90deg, #0b3d2e 0 6px, #1affa0 6px 8px, #062018 8px 14px)',
 }
 
 const ASPECTS: Record<string, { ratio: number; presets: { id: string; label: string }[] }> = {
@@ -39,6 +50,7 @@ const ASPECTS: Record<string, { ratio: number; presets: { id: string; label: str
 }
 const STYLES = [
   { id: 'karaoke_yellow', label: 'Karaoke — yellow highlight' },
+  { id: 'bold_pop', label: 'Bold pop — green highlight' },
   { id: 'neon_box', label: 'Boxed — cyan highlight' },
   { id: 'classic', label: 'Classic subtitles' },
 ]
@@ -51,7 +63,7 @@ function toState(r: ClipResponse): EditState {
     t_in: r.clip.t_in_ms, t_out: r.clip.t_out_ms, title: r.clip.title ?? '',
     captionsOn: e.captions?.enabled !== false, style: e.captions?.style ?? 'karaoke_yellow', fixes,
     mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [],
-    overlay: e.title_overlay ?? '',
+    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' },
   }
 }
 
@@ -60,7 +72,7 @@ function toPatch(s: EditState) {
     t_in_ms: Math.round(s.t_in), t_out_ms: Math.round(s.t_out), title: s.title,
     captions: { enabled: s.captionsOn, style: s.style, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
     layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' ? [] : s.keyframes },
-    title_overlay: s.overlay,
+    title_overlay: s.overlay, background: s.background,
   }
 }
 
@@ -78,6 +90,23 @@ function Studio() {
   const [reframeNote, setReframeNote] = useState<string | null>(null)
   const [renders, setRenders] = useState<Render[]>([])
   const [preset, setPreset] = useState('tiktok')
+  const [bgList, setBgList] = useState<BackgroundList | null>(null)
+  const [bgUploading, setBgUploading] = useState<string | null>(null)
+  const loadBackgrounds = useCallback(() => api.get<BackgroundList>('/v1/backgrounds').then(setBgList).catch(() => {}), [])
+  useEffect(() => { loadBackgrounds() }, [loadBackgrounds])
+  const uploadBackground = async (file: File) => {
+    if (file.size > 95 * 1024 * 1024) { setError('Background videos must be under 95 MB — trim it to a minute or two.'); return }
+    setBgUploading('Uploading…')
+    try {
+      const res = await fetch(`${API_URL}/v1/backgrounds?name=${encodeURIComponent(file.name.replace(/\.[^.]+$/, '').slice(0, 60))}`, {
+        method: 'PUT', body: file, headers: { 'Content-Type': file.type || 'video/mp4', ...(await authHeader()) },
+      })
+      const j = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(j?.error?.message ?? `Upload failed (${res.status})`)
+      await loadBackgrounds()
+      update((s) => ({ ...s, background: { kind: 'upload', key: j.key } }))
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBgUploading(null) }
+  }
   const [exporting, setExporting] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
@@ -228,8 +257,10 @@ function Studio() {
   const cx = state.mode === 'center' ? 0.5 : cxAt(state.keyframes, rel)
   const frameH = 460
   const frameW = Math.round(frameH * aspect.ratio)
-  const vidW = frameH * srcAspect
-  const left = state.mode === 'fit' ? (frameW - vidW) / 2 : Math.min(0, Math.max(frameW - vidW, frameW / 2 - cx * vidW))
+  const split = state.background.kind !== 'none'
+  const topH = split ? frameH / 2 : frameH
+  const vidW = topH * srcAspect
+  const left = state.mode === 'fit' && !split ? (frameW - vidW) / 2 : Math.min(0, Math.max(frameW - vidW, frameW / 2 - cx * vidW))
   // Trimming can only go as far as the preview covers.
   const editUrl = data.candidate?.edit_url ?? data.project?.review_url ?? null
   const editEnd = data.candidate?.edit_url ? offRef.current + Number(data.candidate?.features?.edit_duration_ms ?? 0) : Infinity
@@ -260,21 +291,35 @@ function Studio() {
         <div className="lg:col-span-6 space-y-4">
           <div className="glass-panel rounded-3xl p-5 border border-slate-800 flex flex-col items-center gap-4">
             <div ref={frameRef} className="relative bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl" style={{ width: frameW, height: frameH, maxWidth: '100%' }}>
-              {state.mode === 'fit' && <div className="absolute inset-0 bg-slate-800/60 blur-xl" />}
+              {state.mode === 'fit' && !split && <div className="absolute inset-0 bg-slate-800/60 blur-xl" />}
               {editUrl ? (
                 <video ref={videoRef} src={editUrl} crossOrigin="anonymous" playsInline preload="auto"
                   onLoadedMetadata={(e) => { const v = e.currentTarget; setSrcAspect(v.videoWidth / Math.max(1, v.videoHeight)); v.currentTime = toVideo(state.t_in) }}
                   onClick={() => (videoRef.current?.paused ? play() : videoRef.current?.pause())}
                   className="absolute top-0 max-w-none cursor-pointer"
-                  style={state.mode === 'fit' ? { width: frameW, height: frameW / srcAspect, top: (frameH - frameW / srcAspect) / 2, left: 0 } : { height: frameH, width: vidW, left }} />
+                  style={state.mode === 'fit' && !split ? { width: frameW, height: frameW / srcAspect, top: (frameH - frameW / srcAspect) / 2, left: 0 } : { height: topH, width: vidW, left }} />
               ) : <div className="absolute inset-0 grid place-items-center text-xs text-slate-500 p-6 text-center">The review video is still being prepared.</div>}
+              {split && (
+                <div className="absolute inset-x-0 bottom-0 overflow-hidden" style={{ height: frameH - topH, background: state.background.kind === 'builtin' ? BUILTIN_PREVIEW[state.background.id] : '#000' }}>
+                  {state.background.kind === 'upload' && (() => {
+                    const key = (state.background as { key: string }).key
+                    const url = bgList?.uploads.find((u) => u.key === key)?.preview_url
+                    return url ? <video src={url} muted loop autoPlay playsInline className="w-full h-full object-cover" /> : null
+                  })()}
+                </div>
+              )}
               {state.overlay && rel < 2500 && <div className="absolute top-[12%] inset-x-4 text-center"><span className="bg-black/60 text-white font-bold text-sm px-2 py-1 rounded">{state.overlay}</span></div>}
               {captionLine && (
-                <div className="absolute inset-x-3 bottom-[22%] text-center pointer-events-none">
-                  <span className={`inline-block px-2 py-1 rounded font-extrabold text-[15px] leading-snug ${state.style === 'neon_box' ? 'bg-black/70' : ''}`} style={{ textShadow: state.style !== 'neon_box' ? '0 0 4px #000, 0 0 2px #000' : undefined }}>
+                <div className={`absolute inset-x-3 text-center pointer-events-none ${split ? 'top-1/2 -translate-y-1/2' : 'bottom-[22%]'}`}>
+                  <span className={`inline-block px-2 py-1 rounded leading-snug ${state.style === 'bold_pop' ? 'text-[19px] tracking-wide' : 'text-[15px]'} ${state.style === 'neon_box' ? 'bg-black/70' : ''}`}
+                    style={{
+                      fontFamily: state.style === 'bold_pop' ? 'Anton, Impact, sans-serif' : 'Montserrat, "Arial Black", sans-serif',
+                      fontWeight: state.style === 'karaoke_yellow' ? 900 : state.style === 'bold_pop' ? 400 : 800,
+                      textShadow: state.style !== 'neon_box' ? '0 0 3px #000, 0 0 3px #000, 0 2px 4px #000' : undefined,
+                    }}>
                     {captionLine.words.map((w) => (
-                      <span key={w.i} className={w.i === captionLine.active && state.style !== 'classic' ? (state.style === 'neon_box' ? 'text-cyan-300' : 'text-yellow-300') : 'text-white'}>
-                        {state.style === 'karaoke_yellow' ? fixed(w).toUpperCase() : fixed(w)}{' '}
+                      <span key={w.i} className={w.i === captionLine.active && state.style !== 'classic' ? (state.style === 'neon_box' ? 'text-cyan-300' : state.style === 'bold_pop' ? 'text-[#4af235]' : 'text-yellow-300') : 'text-white'}>
+                        {state.style === 'karaoke_yellow' || state.style === 'bold_pop' ? fixed(w).toUpperCase() : fixed(w)}{' '}
                       </span>
                     ))}
                   </span>
@@ -344,6 +389,29 @@ function Studio() {
                 <input type="checkbox" checked={state.captionsOn} onChange={(e) => update((s) => ({ ...s, captionsOn: e.target.checked }))} className="accent-indigo-500" />
                 Burn captions into the video
               </label>
+            </div>
+            <div className="text-xs text-slate-400 space-y-2">
+              <div>Background — split screen: speaker on top, footage below</div>
+              <div className="flex flex-wrap gap-2">
+                {([{ value: { kind: 'none' }, label: 'None', id: 'none' }] as { value: Background; label: string; id: string }[])
+                  .concat((bgList?.builtin ?? []).map((b) => ({ value: { kind: 'builtin', id: b.id } as Background, label: b.name, id: `b:${b.id}` })))
+                  .concat((bgList?.uploads ?? []).map((u) => ({ value: { kind: 'upload', key: u.key } as Background, label: u.name, id: `u:${u.key}` })))
+                  .map((o) => {
+                    const cur = state.background
+                    const curId = cur.kind === 'builtin' ? `b:${cur.id}` : cur.kind === 'upload' ? `u:${cur.key}` : 'none'
+                    return (
+                      <button key={o.id} onClick={() => update((s) => ({ ...s, background: o.value }))}
+                        className={`px-3 py-1.5 rounded-lg border text-[11px] max-w-[160px] truncate ${curId === o.id ? 'border-indigo-400 bg-indigo-500/20 text-white' : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'}`}>
+                        {o.label}
+                      </button>
+                    )
+                  })}
+                <label className="px-3 py-1.5 rounded-lg border border-dashed border-slate-700 text-[11px] text-slate-300 cursor-pointer hover:border-slate-500">
+                  {bgUploading ?? '+ Upload gameplay'}
+                  <input type="file" accept="video/mp4,video/quicktime,video/webm" className="hidden" disabled={!!bgUploading} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadBackground(f) }} />
+                </label>
+              </div>
+              <p className="text-[10px] text-slate-500">Upload your own gameplay recording (MP4/MOV/WebM, under 95 MB — a 1–3 minute loop is plenty; it loops and starts at a different point each export). Use footage you recorded or have the rights to. Uploads are deleted after 7 days.</p>
             </div>
             <label className="block text-xs text-slate-400">Title card (first 2.5 s, optional)
               <input value={state.overlay} maxLength={80} onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200" />

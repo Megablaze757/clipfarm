@@ -12,7 +12,7 @@ import { heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pip
 import { nominateMoments } from "./pipeline/moments";
 import { refineWithLLM } from "./pipeline/llm-scoring";
 import { snapBoundaries } from "./pipeline/boundaries";
-import { renderFinal, type RenderSpec } from "./pipeline/render";
+import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
 import { buildSrt } from "./pipeline/captions";
 
 /**
@@ -247,6 +247,7 @@ export async function renderJob(job: RenderJob): Promise<void> {
     // Read the stored media over HTTP Range — only the seconds being cut are
     // fetched, instead of downloading a multi-GB source first.
     const out = join(dir, "out.mp4");
+    setBackgroundSource(r2Url); // uploaded split-screen footage is read straight from R2
     const { durationMs } = await renderFinal(r2Url(job.spec.mezzanine_key), job.spec, dir, out, await ffAuthArgs());
     await r2Upload(job.spec.output_key, out, "video/mp4");
     await supabase.from("render_jobs").update({

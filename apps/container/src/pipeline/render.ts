@@ -18,14 +18,41 @@ export interface RenderSpec {
   scale: { w: number; h: number };
   captions: { mode: "burn" | "none"; style_id: string; words: { w: string; t0: number; t1: number }[] };
   overlays: { type: "title"; text: string; t_ms: [number, number] }[];
+  /** Split screen: speaker on top, this footage below (absent/none = full frame). */
+  background?: { kind: "none" } | { kind: "builtin"; id: string } | { kind: "upload"; key: string };
   watermark: boolean;
   audio: { loudnorm: { target_lufs: number; tp: number } };
   encode: { crf: number; preset: string; fps: number };
 }
 
-// Alpine (Container) and Ubuntu (GitHub runner) keep DejaVu in different places.
-const FONT = ["/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+// Caption/title fonts ship with the pipeline (apps/container/fonts, OFL).
+export const FONTS_DIR = join(__dirname, "..", "..", "fonts");
+const FONT = [join(FONTS_DIR, "Montserrat-ExtraBold.ttf"), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"]
   .find((p) => existsSync(p)) ?? "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+
+/**
+ * Generated split-screen backgrounds: FFmpeg sources, rendered small and
+ * scaled up, so they cost almost nothing and carry no licence. `s` is the
+ * generator's own resolution.
+ */
+export function builtinBackground(id: string, durS: number, fps: number): string {
+  const d = (durS + 1).toFixed(2);
+  switch (id) {
+    case "fractal_zoom":
+      return `mandelbrot=s=270x240:rate=${fps}:end_scale=0.0005:end_pts=${d}:inner=mincol,hue=H=t*0.4`;
+    case "colour_flow":
+      return `gradients=s=270x240:rate=${fps}:speed=0.03:n=5:c0=0xff2d95:c1=0x7a00ff:c2=0x00e5ff:c3=0x00ff88:c4=0xffd000:duration=${d}`;
+    case "pixel_rain":
+      return `cellauto=s=135x120:rule=30:rate=${fps}:scroll=1:full=1,negate,format=rgb24,colorchannelmixer=rr=0.1:gg=0.9:bb=0.6,trim=duration=${d}`;
+    case "neon_life":
+    default:
+      return `life=s=135x120:mold=20:rate=${fps}:ratio=0.18:death_color=#140026:life_color=#00f0ff:mold_color=#ff2d95,trim=duration=${d}`;
+  }
+}
+/** Where an uploaded background lives: an R2 key, or (tests) a local path. */
+let bgSource = (key: string) => key;
+export function setBackgroundSource(fn: (key: string) => string) { bgSource = fn; }
+const hashOf = (s: string) => { let x = 2166136261; for (const c of s) x = Math.imul(x ^ c.charCodeAt(0), 16777619) >>> 0; return x; };
 const dt = (s: string) => s.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\u2019").replace(/%/g, "\\%");
 
 /**
@@ -61,10 +88,24 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const ss = (spec.trim.in_ms / 1000).toFixed(3);
 
   // --- video graph ---
-  const target = w / h;
+  // Split screen: the speaker fills the top half, the background the bottom.
+  const bg = spec.background && spec.background.kind !== "none" ? spec.background : null;
+  const topH = bg ? Math.round(h / 4) * 2 : h;
+  const bgArgs: string[] = [];
+  if (bg?.kind === "builtin") {
+    bgArgs.push("-f", "lavfi", "-i", builtinBackground(bg.id, durS, spec.encode.fps));
+  } else if (bg?.kind === "upload") {
+    // Loop the footage and start somewhere different each export.
+    const bgUrl = bgSource(bg.key);
+    const bgInfo = await probe(bgUrl, inputArgs).catch(() => null);
+    const room = Math.max(0, (bgInfo?.durationMs ?? 0) / 1000 - durS - 1);
+    const start = room > 0 ? (hashOf(spec.trim.in_ms + bg.key) % Math.floor(room * 10)) / 10 : 0;
+    bgArgs.push("-stream_loop", "-1", "-ss", start.toFixed(1), ...inputArgs, "-i", bgUrl);
+  }
+  const target = w / topH;
   const filters: string[] = [];
   let v = "[0:v]";
-  if (spec.crop.mode === "fit") {
+  if (spec.crop.mode === "fit" && !bg) {
     // Letterbox onto a blurred, zoomed copy of itself (§6.6 fallback ladder).
     filters.push(`${v}split=2[bgsrc][fgsrc]`);
     filters.push(`[bgsrc]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},boxblur=20:2,eq=brightness=-0.08[bg]`);
@@ -74,17 +115,23 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     const cropW = Math.floor(Math.min(info.width, info.height * target) / 2) * 2;
     const cropH = Math.floor(Math.min(info.height, cropW / target) / 2) * 2;
     const x = spec.crop.mode === "path" ? cropXExpr(spec.crop.keyframes, info.width, cropW) : String(Math.floor((info.width - cropW) / 2));
-    filters.push(`${v}crop=${cropW}:${cropH}:${x}:${Math.floor((info.height - cropH) / 2)},scale=${w}:${h}:flags=lanczos,setsar=1[v0]`);
+    filters.push(`${v}crop=${cropW}:${cropH}:${x}:${Math.floor((info.height - cropH) / 2)},scale=${w}:${topH}:flags=lanczos,setsar=1[v0]`);
   }
   v = "[v0]";
+  if (bg) {
+    const bh = h - topH;
+    filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}[bgv]`);
+    filters.push(`[v0][bgv]vstack=inputs=2:shortest=1[vs]`);
+    v = "[vs]";
+  }
   let n = 1;
   if (spec.captions.mode === "burn" && spec.captions.words.length) {
     const rel: CapWord[] = spec.captions.words
       .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
       .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
     const assPath = join(dir, "captions.ass");
-    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h));
-    filters.push(`${v}subtitles=filename='${assPath}':fontsdir=/usr/share/fonts[v${n}]`);
+    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg }));
+    filters.push(`${v}subtitles=filename='${assPath}':fontsdir='${FONTS_DIR}'[v${n}]`);
     v = `[v${n++}]`;
   }
   for (const o of spec.overlays ?? []) {
@@ -100,26 +147,40 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   }
   filters.push(`${v}fps=${spec.encode.fps},format=yuv420p[vout]`);
 
-  // --- audio: two-pass loudnorm to −14 LUFS (FR-11.2) ---
+  // SPEED: the loudness measurement (pass 1 of loudnorm) and the video encode
+  // run at the same time; then a quick mux adds the normalised audio to the
+  // already-encoded video (video is stream-copied, only audio is encoded).
   const { target_lufs: I, tp: TP } = spec.audio.loudnorm;
-  let af = `loudnorm=I=${I}:TP=${TP}:LRA=11`;
-  try {
-    const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${af}:print_format=json`, "-f", "null", "-"]);
-    const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
-    if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
-      af += `:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
-    }
-  } catch { /* single-pass fallback */ }
-  af += ",aresample=48000";
+  const base = `loudnorm=I=${I}:TP=${TP}:LRA=11`;
+  const measure = (async () => {
+    if (!info.hasAudio) return base;
+    try {
+      const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${base}:print_format=json`, "-f", "null", "-"]);
+      const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
+      if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
+        return `${base}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
+      }
+    } catch { /* single-pass fallback */ }
+    return base;
+  })();
 
-  await ffmpeg([
-    "-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3),
+  const videoOnly = join(dir, "video-only.mp4");
+  const [af] = await Promise.all([measure, ffmpeg([
+    "-ss", ss, ...inputArgs, "-i", mezzanine, ...bgArgs, "-t", durS.toFixed(3),
     "-filter_complex", filters.join(";"),
-    "-map", "[vout]", "-map", "0:a:0?", "-af", af,
+    "-map", "[vout]", "-an",
     "-c:v", "libx264", "-crf", String(spec.encode.crf), "-preset", spec.encode.preset, "-profile:v", "high",
     "-g", String(spec.encode.fps * 2), "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+    videoOnly,
+  ], 20 * 60 * 1000)]);
+
+  await ffmpeg([
+    "-i", videoOnly,
+    "-ss", ss, ...inputArgs, "-i", mezzanine,
+    "-t", durS.toFixed(3),
+    "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
+    "-af", `${af},aresample=48000`, "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart", out,
-  ], 20 * 60 * 1000);
+  ], 10 * 60 * 1000);
   return { durationMs: Math.round(durS * 1000) };
 }

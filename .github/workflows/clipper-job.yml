@@ -87,11 +87,14 @@ jobs:
 
       # Python for the built-in Whisper fallback. faster-whisper itself installs
       # only if Groq rate-limits this job, so normal jobs don't pay for it.
+      # Exports (render jobs) never transcribe, so they skip all of this.
       - uses: actions/setup-python@v5
+        if: env.JOB_KIND == 'process'
         id: py
         with:
           python-version: "3.12"
       - name: Cache Whisper model
+        if: env.JOB_KIND == 'process'
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
@@ -114,6 +117,7 @@ jobs:
       # Long sources need room: source + working copy + audio can pass 10 GB.
       # Use whichever of /mnt (the runner's extra disk) or the temp dir has more.
       - name: Pick the roomiest disk
+        if: env.JOB_KIND == 'process'
         run: |
           best="$RUNNER_TEMP"; bestfree=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2{print $4}')
           if [ -d /mnt ] && sudo mkdir -p /mnt/clipper && sudo chown "$USER" /mnt/clipper; then

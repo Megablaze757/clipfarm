@@ -111,6 +111,8 @@ export interface ClipEdits {
   layout?: { mode?: "auto" | "center" | "manual" | "fit"; aspect?: string; keyframes?: { t_ms: number; cx: number }[] };
   template_id?: string;
   title_overlay?: string;
+  /** Split-screen footage under the speaker (see backgrounds.ts). */
+  background?: { kind: "none" } | { kind: "builtin"; id: string } | { kind: "upload"; key: string };
 }
 
 /** Applies caption edits to the transcript words inside [t_in, t_out]. */
@@ -162,10 +164,11 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
       style_id: edits.captions?.style ?? "karaoke_yellow",
       words: clipWords(transcript?.words ?? [], clip.t_in_ms, clip.t_out_ms, edits.captions),
     },
+    background: edits.background?.kind === "builtin" || edits.background?.kind === "upload" ? edits.background : { kind: "none" },
     overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, 2500] }] : [],
     watermark: planFor(tenant?.plan).watermark, // FR-11.6 — decided here, never by the client
     audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },
-    encode: { vcodec: "h264", crf: 20, preset: "medium", fps: preset.fps, faststart: true },
+    encode: { vcodec: "h264", crf: 21, preset: "veryfast", fps: preset.fps, faststart: true }, // veryfast: ~3x faster than medium; CRF 21 keeps quality well above what TikTok/Reels re-encode to
   };
   await dbPatch(env, `render_jobs?id=eq.${job.id}`, { spec });
   await runJob(env, "render", job.id, {

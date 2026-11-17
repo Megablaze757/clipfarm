@@ -38,13 +38,21 @@ export function breakLines(words: CapWord[]): Line[] {
   return out;
 }
 
-interface Style { font: string; size: number; primary: string; highlight: string | null; outline: string; border: 1 | 3; outlineW: number; upper: boolean }
+interface Style { font: string; size: number; primary: string; highlight: string | null; outline: string; border: 1 | 3; outlineW: number; upper: boolean; shadow?: number }
 
+/**
+ * Fonts ship with the pipeline (apps/container/fonts, SIL Open Font Licence):
+ * Montserrat Black/ExtraBold — the heavy geometric sans most viral podcast
+ * clips use — and Anton, the tall condensed "MrBeast-style" face. The family
+ * names below are the fonts' own; the weight is in the family, so Bold is off
+ * (libass would otherwise fake-embolden an already heavy face).
+ */
 const STYLES: Record<string, Style> = {
   // ASS colours are &HAABBGGRR
-  karaoke_yellow: { font: "DejaVu Sans", size: 0.072, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.006, upper: true },
-  neon_box:       { font: "DejaVu Sans", size: 0.064, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false },
-  classic:        { font: "DejaVu Sans", size: 0.055, primary: "&H00FFFFFF", highlight: null,        outline: "&H00000000", border: 1, outlineW: 0.004, upper: false },
+  karaoke_yellow: { font: "Montserrat Black",     size: 0.070, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.008, upper: true, shadow: 3 },
+  bold_pop:       { font: "Anton",                size: 0.080, primary: "&H00FFFFFF", highlight: "&H0035F24A", outline: "&H00000000", border: 1, outlineW: 0.009, upper: true, shadow: 4 },
+  neon_box:       { font: "Montserrat ExtraBold", size: 0.062, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false },
+  classic:        { font: "Montserrat ExtraBold", size: 0.055, primary: "&H00FFFFFF", highlight: null,        outline: "&H00000000", border: 1, outlineW: 0.005, upper: false, shadow: 2 },
 };
 
 const ts = (ms: number) => {
@@ -55,11 +63,14 @@ const ts = (ms: number) => {
 const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/\{/g, "(").replace(/\}/g, ")").replace(/\n/g, " ");
 
 /** Builds the .ass file. `words` times are relative to the clip start. */
-export function buildAss(words: CapWord[], styleId: string, w: number, h: number): string {
+export function buildAss(words: CapWord[], styleId: string, w: number, h: number, opts: { middle?: boolean } = {}): string {
   const st = STYLES[styleId] ?? STYLES.karaoke_yellow;
   const size = Math.round(Math.min(w, h * 0.5625) * st.size * 1.4);
   const outline = Math.max(2, Math.round(w * st.outlineW));
-  const marginV = Math.round(h * 0.22); // above TikTok/Reels bottom UI (FR-8.6 safe area)
+  // Normally above TikTok/Reels bottom UI (FR-8.6 safe area); in split screen,
+  // on the seam between speaker and background, where viewers' eyes sit.
+  const marginV = opts.middle ? 0 : Math.round(h * 0.22);
+  const align = opts.middle ? 5 : 2;
   const marginH = Math.round(w * 0.08);
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -70,7 +81,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,${st.font},${size},${st.primary},${st.primary},${st.outline},&H80000000,-1,0,0,0,100,100,0,0,${st.border},${outline},0,2,${marginH},${marginH},${marginV},1
+Style: Cap,${st.font},${size},${st.primary},${st.primary},${st.outline},&H80000000,0,0,0,0,100,100,0,0,${st.border},${outline},${st.shadow ?? 0},${align},${marginH},${marginH},${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
