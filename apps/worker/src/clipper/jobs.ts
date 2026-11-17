@@ -137,7 +137,7 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
   if (!job || job.status !== "queued") return;
   const clip = await dbOne<ClipRow>(env, `clips?id=eq.${job.clip_id}&select=*`);
   if (!clip) return;
-  const cand = await dbOne<{ project_id: string }>(env, `candidates?id=eq.${clip.candidate_id}&select=project_id`);
+  const cand = await dbOne<{ project_id: string; features: { edit_key?: string; edit_offset_ms?: number } | null }>(env, `candidates?id=eq.${clip.candidate_id}&select=project_id,features`);
   if (!cand) return;
   const [project, transcript, tenant] = await Promise.all([
     dbOne<{ id: string; title: string; review_proxy_key: string | null }>(env, `projects?id=eq.${cand.project_id}&select=id,title,review_proxy_key`),
@@ -145,15 +145,17 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     dbOne<{ plan: string }>(env, `tenants?id=eq.${clip.tenant_id}&select=plan`),
   ]);
   const preset = PRESETS[job.preset] ?? PRESETS.tiktok;
+  const section = cand.features?.edit_key && !project?.review_proxy_key ? { key: cand.features.edit_key, offset: Number(cand.features.edit_offset_ms ?? 0) } : null;
   const edits = clip.edits ?? {};
   const spec = {
     version: 3,
     project_id: project?.id ?? cand.project_id,
     // The media the project plays from: the original upload when browsers can
     // play it, otherwise its working copy. (Older projects: the mezzanine.)
-    mezzanine_key: project?.review_proxy_key || `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
+    // Long streams have no full copy: each clip exports from its own section.
+    mezzanine_key: section ? section.key : project?.review_proxy_key || `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
     output_key: `${clip.tenant_id}/projects/${cand.project_id}/renders/${job.id}.mp4`,
-    trim: { in_ms: clip.t_in_ms, out_ms: clip.t_out_ms },
+    trim: { in_ms: clip.t_in_ms - (section?.offset ?? 0), out_ms: clip.t_out_ms - (section?.offset ?? 0) },
     crop: {
       mode: edits.layout?.mode === "fit" ? "fit" : (edits.layout?.keyframes?.length ? "path" : "center"),
       keyframes: (edits.layout?.keyframes ?? []).slice(0, 60),
@@ -162,7 +164,8 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     captions: {
       mode: edits.captions?.enabled === false ? "none" : "burn",
       style_id: edits.captions?.style ?? "karaoke_yellow",
-      words: clipWords(transcript?.words ?? [], clip.t_in_ms, clip.t_out_ms, edits.captions),
+      words: clipWords(transcript?.words ?? [], clip.t_in_ms, clip.t_out_ms, edits.captions)
+        .map((w) => (section ? { ...w, t0: w.t0 - section.offset, t1: w.t1 - section.offset } : w)),
     },
     background: edits.background?.kind === "builtin" || edits.background?.kind === "upload" ? edits.background : { kind: "none" },
     overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, 2500] }] : [],

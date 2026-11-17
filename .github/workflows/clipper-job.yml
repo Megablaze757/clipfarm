@@ -65,14 +65,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/clipper-tools
-          key: clipper-tools-${{ steps.week.outputs.n }}
-      - name: Download FFmpeg + yt-dlp
+          key: clipper-tools-v2-${{ steps.week.outputs.n }}
+      - name: Download FFmpeg + yt-dlp + TwitchDownloaderCLI
         if: steps.tools.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ~/clipper-tools && cd ~/clipper-tools
           curl -sSfL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | tar -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
           curl -sSfL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-          chmod +x ffmpeg ffprobe yt-dlp
+          # Twitch VOD chat replays, for chat analysis on long streams.
+          gh release download -R lay295/TwitchDownloader -p '*CLI*Linux-x64.zip' -O tdcli.zip && unzip -oq tdcli.zip TwitchDownloaderCLI && rm tdcli.zip || echo "::warning::TwitchDownloaderCLI unavailable — chat analysis needs a chat log upload"
+          chmod +x ffmpeg ffprobe yt-dlp; [ -f TwitchDownloaderCLI ] && chmod +x TwitchDownloaderCLI || true
       - name: Put tools on PATH
         run: |
           echo "$HOME/clipper-tools" >> "$GITHUB_PATH"
@@ -133,4 +137,6 @@ jobs:
           # "small": noticeably more accurate than "base" (measured 7.7x real time on
           # a runner, ~8 min per hour of audio, vs 19x / ~3 min for base).
           WHISPER_MODEL: small
-        run: node apps/container/dist/cli.js "$JOB_KIND" "$JOB_ID"
+        run: |
+          [ -x "$HOME/clipper-tools/TwitchDownloaderCLI" ] && export TWITCH_CHAT_BIN="$HOME/clipper-tools/TwitchDownloaderCLI"
+          node apps/container/dist/cli.js "$JOB_KIND" "$JOB_ID"

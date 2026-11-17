@@ -100,7 +100,7 @@ function ProjectView() {
                   {c.proxy_url ? (
                     // Plays the clip straight from the source: the #t= fragment starts and
                     // stops it at the clip, object-cover does the centre 9:16 crop.
-                    <video src={`${c.proxy_url}#t=${(c.t_in_ms / 1000).toFixed(2)},${(c.t_out_ms / 1000).toFixed(2)}`} poster={c.thumb_url ?? undefined} controls playsInline preload="none" className="w-full h-full object-cover" />
+                    <video src={`${c.proxy_url}#t=${((c.t_in_ms - (c.features?.edit_key ? Number(c.features.edit_offset_ms ?? 0) : 0)) / 1000).toFixed(2)},${((c.t_out_ms - (c.features?.edit_key ? Number(c.features.edit_offset_ms ?? 0) : 0)) / 1000).toFixed(2)}`} poster={c.thumb_url ?? undefined} controls playsInline preload="none" className="w-full h-full object-cover" />
                   ) : <div className="w-full h-full grid place-items-center text-xs text-slate-500">No preview</div>}
                   <div className="absolute top-3 right-3 bg-slate-900/90 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-full text-xs font-bold">{Number(c.score).toFixed(0)}</div>
                   <div className="absolute top-3 left-3 text-[10px] font-mono text-slate-200 bg-slate-900/80 px-2 py-0.5 rounded">{formatDuration(c.t_in_ms)} · {Math.round((c.t_out_ms - c.t_in_ms) / 1000)}s</div>

@@ -10,8 +10,9 @@ import { sentences } from "./pipeline/text";
 import { generateWindows, targetCount } from "./pipeline/candidates";
 import { heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
 import { chatNominations, nominateMoments } from "./pipeline/moments";
-import { chatSpikes, parseChat, type ChatSignal } from "./pipeline/chat";
-import { readFile } from "node:fs/promises";
+import { chatSpikes, type ChatSignal } from "./pipeline/chat";
+import { alignSection, buildZoneAudio, downloadAudioOnly, downloadSection, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
+import { isSiteUrl } from "./pipeline/ingest";
 import { refineWithLLM } from "./pipeline/llm-scoring";
 import { snapBoundaries } from "./pipeline/boundaries";
 import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
@@ -61,6 +62,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
     await setStatus(projectId, "transcoding", { progress: 5 });
     stage("ingest");
     let input: string, inputArgs: string[], inputName: string, title: string | undefined;
+    let long: { url: string; chatPath: Promise<string | null> } | null = null;
     if (job.source.kind === "upload") {
       // 8 parallel range requests, then everything reads the local file.
       // (Streaming through one connection measured ~20 MB/s: 2.5 min for 1 h.)
@@ -71,8 +73,22 @@ export async function processProject(job: ProcessJob): Promise<void> {
       stage(`downloaded ${(bytes / 1e9).toFixed(2)} GB in ${((Date.now() - t) / 1000).toFixed(1)} s`);
       inputArgs = []; inputName = job.source.r2_key;
     } else {
-      const src = await fetchSource(job.source, dir);
-      input = src.path; inputArgs = []; inputName = src.path; title = src.title;
+      // A long stream (> 2 h): audio only now, chat alongside, video later
+      // just for the clips that are picked (longform.ts).
+      const linkInfo = isSiteUrl(job.source.url) ? await probeLink(job.source.url).catch(() => null) : null;
+      if (linkInfo && linkInfo.durationMs > LONG_MS) {
+        const vod = twitchVodId(job.source.url);
+        const t = Date.now();
+        const chatPath = vod && !job.options.chat_key ? downloadTwitchChat(vod, dir) : Promise.resolve(null);
+        chatPath.catch(() => {});
+        input = await downloadAudioOnly(job.source.url, dir);
+        stage(`long stream (${(linkInfo.durationMs / 3_600_000).toFixed(1)} h): audio in ${((Date.now() - t) / 1000).toFixed(0)} s`);
+        inputArgs = []; inputName = input; title = linkInfo.title;
+        long = { url: job.source.url, chatPath };
+      } else {
+        const src = await fetchSource(job.source, dir);
+        input = src.path; inputArgs = []; inputName = src.path; title = src.title;
+      }
     }
     const info = await probe(input, inputArgs);
     if (!info.hasAudio) throw new StageError("E_NO_AUDIO_STREAM", "This source has no audio track, so there's nothing to transcribe.");
@@ -89,7 +105,10 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const playable = browserPlayable(info, inputName);
     let mediaKey: string;
     let mediaReady: Promise<void>;
-    if (playable && job.source.kind === "upload") {
+    if (long) {
+      mediaKey = ""; // no full copy — each picked clip gets its own section below
+      mediaReady = Promise.resolve();
+    } else if (playable && job.source.kind === "upload") {
       mediaKey = job.source.r2_key;
       mediaReady = Promise.resolve();
     } else if (playable) {
@@ -105,20 +124,54 @@ export async function processProject(job: ProcessJob): Promise<void> {
       });
     }
     mediaReady.catch(() => {}); // awaited below; avoid an unhandled rejection meanwhile
-    stage(playable ? "media: original is browser-playable — no working copy" : "media: making a working copy");
+    if (!long) stage(playable ? "media: original is browser-playable — no working copy" : "media: making a working copy");
 
     // Audio for transcription, streamed straight from the source.
     const audio = join(dir, "audio.wav");
     await extractAudio(input, audio, inputArgs);
 
+    // Live chat — a log the user added, or (long Twitch streams) fetched
+    // automatically. Bursts mark what the audience reacted to (chat.ts).
+    // Never fatal: a bad or missing log just means no chat signal.
+    let chat: ChatSignal | null = null;
+    try {
+      let chatFile: string | null = null;
+      if (job.options.chat_key) {
+        chatFile = join(dir, "chat.log");
+        await r2DownloadParallel(job.options.chat_key, chatFile);
+      } else if (long) {
+        chatFile = await long.chatPath;
+      }
+      if (chatFile) {
+        chat = chatSpikes(await parseChatFile(chatFile), info.durationMs);
+        stage(`chat: ${chat.messages} messages, ${chat.spikes.length} spikes`);
+      }
+    } catch (e) {
+      console.warn(`chat log unusable: ${(e as Error).message.slice(0, 200)}`);
+    }
+
     // 3. ASR + audio analysis (FR-3.x, FR-4.1–4.3)
     await setStatus(projectId, "transcribing", { progress: 20 });
     stage("asr");
-    const [transcript, envelope, loudness] = await Promise.all([
-      transcribe(audio, info.durationMs, dir, job.options.language ?? "auto"),
-      energyEnvelope(audio, info.durationMs),
-      analyzeLoudness(audio),
-    ]);
+    let transcript, envelope, loudness;
+    let zones: Zone[] | null = null;
+    if (long) {
+      // Only the hot zones are transcribed, then mapped back to stream time.
+      envelope = await energyEnvelope(audio, info.durationMs);
+      zones = chat?.spikes.length ? zonesFromChat(chat, info.durationMs) : zonesFromEnergy(envelope, info.durationMs);
+      const zoneMs = zones.reduce((a, z) => a + z.t1 - z.t0, 0);
+      stage(`hot zones: ${zones.length} (${(zoneMs / 60_000).toFixed(0)} min of ${(info.durationMs / 60_000).toFixed(0)}) from ${chat?.spikes.length ? "chat" : "audio reactions"}`);
+      const zoneWav = join(dir, "zones.wav");
+      await buildZoneAudio(audio, zones, zoneWav);
+      const [t, l] = await Promise.all([transcribe(zoneWav, zoneMs, dir, job.options.language ?? "auto"), analyzeLoudness(zoneWav)]);
+      transcript = remapTranscript(t, zones); loudness = l;
+    } else {
+      [transcript, envelope, loudness] = await Promise.all([
+        transcribe(audio, info.durationMs, dir, job.options.language ?? "auto"),
+        energyEnvelope(audio, info.durationMs),
+        analyzeLoudness(audio),
+      ]);
+    }
     await supabase.from("transcripts").upsert({
       project_id: projectId, words: transcript.words, segments: transcript.segments,
       speakers: transcript.speakers, language: transcript.language,
@@ -131,24 +184,12 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const words = transcript.words;
     const sents = sentences(words);
     const cap = Math.max(60, Math.round((info.durationMs / 3_600_000) * 500));
-    const windows = generateWindows(words, sents, job.options.clip_durations, cap);
+    // (Long streams: never a window that jumps between two hot zones.)
+    const windows = generateWindows(words, sents, job.options.clip_durations, cap).filter((w) => !zones || !spansGap(words, w.i0, w.i1));
     const speechMs = words.reduce((s, w) => s + (w.t1 - w.t0), 0);
     const globalRate = words.length / Math.max(1, speechMs / 1000);
     const reactions = reactionEvents(words, envelope);
 
-    // Live chat, when the user added a chat log: bursts mark the moments the
-    // audience reacted to (chat.ts). Never fatal — a bad file just means no chat signal.
-    let chat: ChatSignal | null = null;
-    if (job.options.chat_key) {
-      try {
-        const chatPath = join(dir, "chat.log");
-        await r2DownloadParallel(job.options.chat_key, chatPath);
-        chat = chatSpikes(parseChat(await readFile(chatPath, "utf8")), info.durationMs);
-        stage(`chat: ${chat.messages} messages, ${chat.spikes.length} spikes`);
-      } catch (e) {
-        console.warn(`chat log unusable: ${(e as Error).message.slice(0, 200)}`);
-      }
-    }
     const scored = windows.map((w) => heuristicScore(words, envelope, w, globalRate, reactions, chat));
 
     // Engine v2, pass 1: an AI reads the whole transcript and nominates the
@@ -158,7 +199,8 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const aiNominations = await nominateMoments(words, sents, 6, chat);
     // The biggest chat spikes are candidates too, unless the AI already took that moment.
     const nominations = [...aiNominations, ...chatNominations(sents, chat).filter((c) =>
-      !aiNominations.some((m) => Math.max(m.s0, c.s0) <= Math.min(m.s1, c.s1)))];
+      !aiNominations.some((m) => Math.max(m.s0, c.s0) <= Math.min(m.s1, c.s1)))]
+      .filter((m) => !zones || !spansGap(words, sents[m.s0].i0, sents[m.s1].i1));
     const nominated = nominations.map((m) => {
       const c = heuristicScore(words, envelope, { i0: sents[m.s0].i0, i1: sents[m.s1].i1, t0: sents[m.s0].t0, t1: sents[m.s1].t1 }, globalRate, reactions, chat);
       c.features.nominated = true;
@@ -185,11 +227,35 @@ export async function processProject(job: ProcessJob): Promise<void> {
     // A thumbnail is one keyframe seek: well under a second each.
     await setStatus(projectId, "scoring", { progress: 85 });
     stage("thumbnails");
-    const rows: Record<string, unknown>[] = new Array(picked.length);
-    await pool(picked.length, 4, async (i) => {
+    const rows: (Record<string, unknown> | undefined)[] = new Array(picked.length);
+    let posterFrom: { file: string; atMs: number } | null = null;
+    await pool(picked.length, long ? 3 : 4, async (i) => {
       const c: Candidate = picked[i];
       const thumbPath = join(dir, `thumb_${i}.jpg`);
       const thumbKey = `${prefix}/thumbs/cand_${i}.jpg`;
+      if (long) {
+        // Long stream: fetch just this clip's video (±20 s), find exactly where
+        // it sits in the stream, and make it the clip's own media.
+        const secPath = join(dir, `section_${i}.mp4`), secKey = `${prefix}/sections/cand_${i}.mp4`;
+        const want = Math.max(0, c.t_in_ms - 20_000);
+        try {
+          await downloadSection(long.url, want, c.t_out_ms + 20_000, secPath);
+          const sec = await probe(secPath);
+          const offset = await alignSection(secPath, sec.durationMs, envelope, want);
+          await r2Upload(secKey, secPath, "video/mp4");
+          await poster(secPath, Math.max(0, c.t_in_ms - offset + 1000), thumbPath).catch(() => {});
+          await r2Upload(thumbKey, thumbPath, "image/jpeg").catch(() => {});
+          if (i === 0) posterFrom = { file: secPath, atMs: Math.max(0, c.t_in_ms - offset + 1000) };
+          rows[i] = {
+            project_id: projectId, t_in_ms: c.t_in_ms, t_out_ms: c.t_out_ms, score: c.score, subscores: c.subscores,
+            features: { ...c.features, thumb_key: thumbKey, edit_key: secKey, edit_offset_ms: offset, edit_duration_ms: sec.durationMs },
+            rationale: c.rationale, proxy_uri: secKey, scorer_version: `${SCORER_VERSION}${c.features.model ? `+${c.features.model}` : ""}`,
+          };
+        } catch (e) {
+          console.warn(`section ${i}: ${(e as Error).message.slice(0, 300)}`); // dropped: no video to edit
+        }
+        return;
+      }
       try {
         await poster(input, c.t_in_ms + 1000, thumbPath, undefined, inputArgs);
         await r2Upload(thumbKey, thumbPath, "image/jpeg");
@@ -204,14 +270,18 @@ export async function processProject(job: ProcessJob): Promise<void> {
       };
     });
     await mediaReady;
-    await supabase.from("artifacts").upsert({ project_id: projectId, stage: "media", uri: mediaKey, meta: { width: info.width, height: info.height, playable } }, { onConflict: "project_id,stage" });
+    if (!long) await supabase.from("artifacts").upsert({ project_id: projectId, stage: "media", uri: mediaKey, meta: { width: info.width, height: info.height, playable } }, { onConflict: "project_id,stage" });
+    const saved = rows.filter((r): r is Record<string, unknown> => !!r);
+    if (!saved.length) throw new StageError("E_INGEST_CORRUPT", "The stream's video couldn't be downloaded for any clip.");
     // A retried project replaces its previous candidates.
     await supabase.from("candidates").delete().eq("project_id", projectId);
-    const { error: insErr } = await supabase.from("candidates").insert(rows);
+    const { error: insErr } = await supabase.from("candidates").insert(saved);
     if (insErr) throw new Error(`saving candidates: ${insErr.message}`);
 
     const posterPath = join(dir, "poster.jpg");
-    await poster(input, Math.max(1000, info.durationMs * 0.05), posterPath, undefined, inputArgs);
+    const pf = posterFrom as { file: string; atMs: number } | null;
+    if (long && pf) await poster(pf.file, pf.atMs, posterPath);
+    else await poster(input, Math.max(1000, info.durationMs * 0.05), posterPath, undefined, inputArgs);
     await r2Upload(`${prefix}/thumbs/poster.jpg`, posterPath, "image/jpeg");
     await writeFile(join(dir, "transcript.srt"), buildSrt(words));
     await r2Upload(`${prefix}/artifacts/transcript.srt`, join(dir, "transcript.srt"), "application/x-subrip");
@@ -224,9 +294,9 @@ export async function processProject(job: ProcessJob): Promise<void> {
 
     await setStatus(projectId, "ready", {
       // review_proxy_key = the media the editor and shortlist play.
-      progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: mediaKey,
-      candidate_count: rows.length, top_score: picked[0]?.score ?? null,
-      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only", ...(chat ? { chat: `${chat.messages} messages, ${chat.spikes.length} spikes` } : {}) },
+      progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: long ? null : mediaKey,
+      candidate_count: saved.length, top_score: picked[0]?.score ?? null,
+      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only", ...(chat ? { chat: `${chat.messages} messages, ${chat.spikes.length} spikes` } : {}), ...(zones ? { long_stream: `${zones.length} hot zones` } : {}) },
     });
     stage("ready");
     // If a working copy replaced the upload, the original isn't needed: delete

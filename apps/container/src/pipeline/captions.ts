@@ -1,7 +1,8 @@
 /**
  * §6.7 caption timing + FR-9.x styles, emitted as ASS for libass to burn in.
  *
- * Words → lines of ≤5 words / ≤32 chars, never ending on an article or
+ * Words → lines (viral styles: ≤3 words / ≤22 chars — what Hormozi-style
+ * clips use; classic: ≤5 / ≤32), never ending on an article or
  * preposition (no orphans) → each line shown from 80 ms before its first word
  * to 120 ms after its last → one event per word so the active word is
  * highlighted (karaoke).
@@ -10,10 +11,8 @@ export interface CapWord { w: string; t0: number; t1: number }
 export interface Line { words: CapWord[]; t0: number; t1: number }
 
 const ORPHANS = new Set(["a", "an", "the", "of", "to", "in", "on", "for", "and", "but", "or", "with", "at", "by", "my", "your", "our"]);
-const MAX_WORDS = 5;
-const MAX_CHARS = 32;
 
-export function breakLines(words: CapWord[]): Line[] {
+export function breakLines(words: CapWord[], MAX_WORDS = 5, MAX_CHARS = 32): Line[] {
   const lines: CapWord[][] = [];
   let cur: CapWord[] = [];
   const len = (ws: CapWord[]) => ws.map((w) => w.w).join(" ").length;
@@ -38,7 +37,11 @@ export function breakLines(words: CapWord[]): Line[] {
   return out;
 }
 
-interface Style { font: string; size: number; primary: string; highlight: string | null; outline: string; border: 1 | 3; outlineW: number; upper: boolean; shadow?: number }
+interface Style {
+  font: string; size: number; primary: string; highlight: string | null; outline: string; border: 1 | 3; outlineW: number; upper: boolean; shadow?: number;
+  /** Words per caption group (viral styles: 2–3). */ words?: number; chars?: number;
+  /** The spoken word pops in (scales from 118% to 100%). */ pop?: boolean;
+}
 
 /**
  * Fonts ship with the pipeline (apps/container/fonts, SIL Open Font Licence):
@@ -49,9 +52,9 @@ interface Style { font: string; size: number; primary: string; highlight: string
  */
 const STYLES: Record<string, Style> = {
   // ASS colours are &HAABBGGRR
-  karaoke_yellow: { font: "Montserrat Black",     size: 0.070, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.008, upper: true, shadow: 3 },
-  bold_pop:       { font: "Anton",                size: 0.080, primary: "&H00FFFFFF", highlight: "&H0035F24A", outline: "&H00000000", border: 1, outlineW: 0.009, upper: true, shadow: 4 },
-  neon_box:       { font: "Montserrat ExtraBold", size: 0.062, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false },
+  karaoke_yellow: { font: "Montserrat Black",     size: 0.070, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.008, upper: true, shadow: 3, words: 3, chars: 22, pop: true },
+  bold_pop:       { font: "Anton",                size: 0.080, primary: "&H00FFFFFF", highlight: "&H0035F24A", outline: "&H00000000", border: 1, outlineW: 0.009, upper: true, shadow: 4, words: 2, chars: 16, pop: true },
+  neon_box:       { font: "Montserrat ExtraBold", size: 0.062, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false, words: 4, chars: 26 },
   classic:        { font: "Montserrat ExtraBold", size: 0.055, primary: "&H00FFFFFF", highlight: null,        outline: "&H00000000", border: 1, outlineW: 0.005, upper: false, shadow: 2 },
 };
 
@@ -87,7 +90,7 @@ Style: Cap,${st.font},${size},${st.primary},${st.primary},${st.outline},&H800000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
   const events: string[] = [];
-  for (const line of breakLines(words)) {
+  for (const line of breakLines(words, st.words ?? 5, st.chars ?? 32)) {
     const texts = line.words.map((x) => esc(st.upper ? x.w.toUpperCase() : x.w));
     if (!st.highlight) {
       events.push(`Dialogue: 0,${ts(line.t0)},${ts(line.t1)},Cap,,0,0,0,,${texts.join(" ")}`);
@@ -97,7 +100,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       const start = k === 0 ? line.t0 : word.t0;
       const end = k + 1 < line.words.length ? line.words[k + 1].t0 : line.t1;
       if (end <= start) return;
-      const text = texts.map((t, j) => (j === k ? `{\\c${st.highlight}}${t}{\\c${st.primary}}` : t)).join(" ");
+      const on = st.pop ? `{\\c${st.highlight}\\fscx118\\fscy118\\t(0,110,\\fscx100\\fscy100)}` : `{\\c${st.highlight}}`;
+      const off = st.pop ? `{\\c${st.primary}\\fscx100\\fscy100}` : `{\\c${st.primary}}`;
+      const text = texts.map((t, j) => (j === k ? `${on}${t}${off}` : t)).join(" ");
       events.push(`Dialogue: 0,${ts(start)},${ts(end)},Cap,,0,0,0,,${text}`);
     });
   }

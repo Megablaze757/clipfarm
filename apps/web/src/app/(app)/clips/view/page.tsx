@@ -247,9 +247,11 @@ function Studio() {
     if (!state?.captionsOn) return null
     const idx = inClip.findIndex((w) => now >= w.t0 - 80 && now < w.t1 + 120)
     if (idx < 0) return null
-    const start = Math.floor(idx / 5) * 5
-    return { words: inClip.slice(start, start + 5), active: inClip[idx].i }
-  }, [inClip, now, state?.captionsOn])
+    // Same group sizes as the export: viral styles show 2–3 words at a time.
+    const per = state.style === 'bold_pop' ? 2 : state.style === 'karaoke_yellow' ? 3 : state.style === 'neon_box' ? 4 : 5
+    const start = Math.floor(idx / per) * per
+    return { words: inClip.slice(start, start + per), active: inClip[idx].i }
+  }, [inClip, now, state?.captionsOn, state?.style])
 
   if (!session || (!data && !error)) return <Loading />
   if (!data || !state) return <div className="max-w-3xl mx-auto px-6 py-16"><ErrorBox message={error ?? 'Not found'} onRetry={load} /></div>

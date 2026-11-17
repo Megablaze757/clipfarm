@@ -34,6 +34,11 @@ async function assertPublic(url: URL): Promise<void> {
 const SITE_RE = /(^|\.)(youtube\.com|youtu\.be|twitch\.tv|vimeo\.com|x\.com|twitter\.com|tiktok\.com|instagram\.com|facebook\.com|kick\.com|rumble\.com|dailymotion\.com)$/i;
 
 /** Gets the source onto local disk. Returns the path and, for site links, the page title. */
+/** A site yt-dlp handles (YouTube, Twitch, Kick, …) rather than a direct file link. */
+export function isSiteUrl(u: string): boolean {
+  try { return SITE_RE.test(new URL(u).hostname); } catch { return false; }
+}
+
 export async function fetchSource(source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string }, dir: string): Promise<{ path: string; title?: string }> {
   if (source.kind === "upload") {
     const ext = source.r2_key.slice(source.r2_key.lastIndexOf("."));

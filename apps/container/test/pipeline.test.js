@@ -306,3 +306,39 @@ test("chat: finds a burst against the stream's own baseline and boosts that clip
   assert.ok(withChat.score > plain.score + 3, `${withChat.score} vs ${plain.score}`);
   assert.ok(withChat.features.badges.some((b) => b.includes("Chat")));
 });
+
+test("long streams: hot zones from chat, mapped back to stream time, no cross-zone clips", () => {
+  const L = require("../dist/pipeline/longform");
+  const H = 3_600_000;
+  const chat = { messages: 1e5, spikes: [
+    { t: 2 * H, peak: 2 * H + 8000, z: 12, ratio: 6, kind: "laugh", sample: [] },
+    { t: 2 * H + 60_000, peak: 2 * H + 70_000, z: 8, ratio: 4, kind: "hype", sample: [] }, // merges with the first
+    { t: 9 * H, peak: 9 * H + 6000, z: 9, ratio: 5, kind: "shock", sample: [] },
+  ] };
+  const zones = L.zonesFromChat(chat, 10 * H);
+  assert.equal(zones.length, 2);
+  assert.equal(zones[0].t0, 2 * H - 120_000);
+  assert.equal(zones[0].t1, 2 * H + 70_000 + 45_000);
+  assert.equal(L.zoneBudget(10 * H), 40);
+  // A word 10 s into the stitched audio is 10 s into zone 1; one just past zone 1's length is in zone 2.
+  const len0 = zones[0].t1 - zones[0].t0;
+  const t = { words: [{ w: "a", t0: 10_000, t1: 10_400, conf: 1, speaker: "S1" }, { w: "b", t0: len0 + 5000, t1: len0 + 5300, conf: 1, speaker: "S1" }], segments: [], speakers: ["S1"], language: "en" };
+  const m = L.remapTranscript(t, zones);
+  assert.equal(m.words[0].t0, zones[0].t0 + 10_000);
+  assert.equal(m.words[1].t0, zones[1].t0 + 5000);
+  assert.ok(L.spansGap(m.words, 0, 1));
+  assert.ok(!L.spansGap([{ t0: 0, t1: 300 }, { t0: 800, t1: 900 }], 0, 1));
+  // Energy zones: a loud burst in a quiet stream is found.
+  const env = new Float32Array(3 * 36_000).fill(0.05);
+  for (let i = 50_000; i < 50_080; i++) env[i] = 0.9;
+  const ez = L.zonesFromEnergy(env, 3 * H);
+  assert.ok(ez.some((z) => z.t0 <= 5_000_000 && z.t1 >= 5_008_000));
+  assert.equal(L.twitchVodId("https://www.twitch.tv/videos/2922436506"), "2922436506");
+  assert.equal(L.twitchVodId("https://youtube.com/watch?v=x"), null);
+});
+
+test("chat: TwitchDownloader text export parses", () => {
+  const { parseChat } = require("../dist/pipeline/chat");
+  const txt = "[0:00:05] someuser: KEKW\n[12:03:45] other_user: W stream";
+  assert.deepEqual(parseChat(txt).map((m) => [m.t, m.text]), [[5000, "KEKW"], [43425000, "W stream"]]);
+});
