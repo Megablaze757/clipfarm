@@ -342,3 +342,22 @@ test("chat: TwitchDownloader text export parses", () => {
   const txt = "[0:00:05] someuser: KEKW\n[12:03:45] other_user: W stream";
   assert.deepEqual(parseChat(txt).map((m) => [m.t, m.text]), [[5000, "KEKW"], [43425000, "W stream"]]);
 });
+
+test("background games open on a hook: first payoff lands within seconds", () => {
+  const { makeGame, hookStartSteps, GAMES, GAME_HOOKS } = require("../dist/pipeline/games");
+  for (const id of Object.keys(GAMES)) {
+    assert.ok(GAME_HOOKS[id], `${id} has a challenge line`);
+    for (const seed of [1, 42, 999]) {
+      const g = makeGame(id, seed);
+      if (!g.lead) continue;
+      const start = hookStartSteps(id, seed, 30);
+      for (let i = 0; i < start; i++) g.step(1 / 30);
+      const e0 = g.events;
+      let t = 0;
+      while (g.events === e0 && t < 30 * 15) { g.step(1 / 30); t++; }
+      const secs = t / 30;
+      assert.ok(secs <= g.lead + 1.5, `${id}/${seed}: first payoff after ${secs.toFixed(1)} s (lead ${g.lead})`);
+      console.log(`  ${id} seed ${seed}: payoff at ${secs.toFixed(1)} s`);
+    }
+  }
+});

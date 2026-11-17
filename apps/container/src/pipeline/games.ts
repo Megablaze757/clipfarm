@@ -125,12 +125,33 @@ export class Canvas {
   }
 }
 
-export interface Game { step(dt: number): void; draw(c: Canvas): void }
+export interface Game {
+  step(dt: number): void;
+  draw(c: Canvas): void;
+  /** Payoffs so far (a ring shatters, a ball escapes, the circle fills…). */
+  events: number;
+  /** Seconds of build-up to show before a payoff when the footage starts. */
+  readonly lead?: number;
+}
+
+/**
+ * The challenge line shown on the footage — the same "will it…?" framing the
+ * viral simulation videos use to make people wait for the payoff.
+ */
+export const GAME_HOOKS: Record<string, string> = {
+  escape_rings: "WILL IT ESCAPE?",
+  grow_ball: "WILL IT FILL THE CIRCLE?",
+  ring_bounce: "EVERY ESCAPE = 2 MORE BALLS",
+  plinko: "WHERE WILL THEY LAND?",
+  runner: "HOW FAR CAN IT GET?",
+  stacker: "HOW HIGH CAN IT STACK?",
+};
 
 // ---------------------------------------------------------------------------
 
 /** Balls bounce inside a spinning ring; a ball that slips out of the gap spawns two more. */
 class RingBounce implements Game {
+  events = 0; readonly lead = 1.2;
   private balls: { x: number; y: number; vx: number; vy: number; r: number; hue: number; out: boolean }[] = [];
   private rot = 0; private hue: number; private escaped = 0; private t = 0;
   private readonly cx = GAME_W / 2; private readonly cy = GAME_H / 2 + 6; private readonly R = 205;
@@ -153,7 +174,7 @@ class RingBounce implements Game {
         const ang = (((Math.atan2(dy, dx) - this.rot) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
         const slack = b.r / this.R;
         if (ang > slack && ang < this.gap - slack) {
-          b.out = true; this.escaped++;
+          b.out = true; this.escaped++; this.events++;
           const alive = this.balls.filter((x) => !x.out).length;
           if (alive < 60) { this.spawn(); this.spawn(); }
           continue;
@@ -178,6 +199,7 @@ class RingBounce implements Game {
 
 /** Marbles rain through a peg board and pile up into a bell curve. */
 class Plinko implements Game {
+  events = 0;
   private pegs: { x: number; y: number; flash: number }[] = [];
   private balls: { x: number; y: number; vx: number; vy: number; hue: number }[] = [];
   private bins: number[]; private readonly binW = 45; private t = 0; private hue: number;
@@ -234,6 +256,7 @@ class Plinko implements Game {
 
 /** An endless runner: jumps the spikes, grabs the coins, speeds up. */
 class Runner implements Game {
+  events = 0; readonly lead = 1.0;
   private x = 0; private speed = 280; private py = 0; private vy = 0; private score = 0; private crash = 0;
   private obstacles: { x: number; w: number; h: number }[] = [];
   private coins: { x: number; y: number; got: number }[] = [];
@@ -279,7 +302,7 @@ class Runner implements Game {
       if (o.x < this.px + this.size - 4 && o.x + o.w > this.px + 4 && top + this.size > this.ground - o.h + 4) { this.crash = 0.8; return; }
     }
     for (const c of this.coins) {
-      if (!c.got && Math.abs(c.x - (this.px + this.size / 2)) < 24 && Math.abs(c.y - (top + this.size / 2)) < 26) { c.got = 0.01; this.score += 25; }
+      if (!c.got && Math.abs(c.x - (this.px + this.size / 2)) < 24 && Math.abs(c.y - (top + this.size / 2)) < 26) { c.got = 0.01; this.score += 25; this.events++; }
       if (c.got) c.got += dt * 4;
     }
   }
@@ -306,6 +329,7 @@ class Runner implements Game {
 
 /** Sliding blocks stack into a tower; the overhang is sliced off and falls. */
 class Stacker implements Game {
+  events = 0; readonly lead = 1.2;
   private tower: { x: number; w: number; hue: number }[] = [];
   private cur = { x: 0, w: 0, dir: 1, target: 0 };
   private debris: { x: number; y: number; w: number; vy: number; hue: number }[] = [];
@@ -335,7 +359,7 @@ class Stacker implements Game {
     // drop
     let x = c.target, w = c.w;
     const level = this.tower.length, hue = this.hue + level * 0.045;
-    if (Math.abs(x - top.x) < 3) { x = top.x; w = Math.min(260, top.w + 4); this.flash = 1; }
+    if (Math.abs(x - top.x) < 3) { x = top.x; w = Math.min(260, top.w + 4); this.flash = 1; this.events++; }
     else {
       const l = Math.max(x, top.x), r = Math.min(x + w, top.x + top.w);
       const y = this.yOf(level);
@@ -376,6 +400,7 @@ function stepParticles(ps: Particle[], dt: number): Particle[] {
  * inside nested spinning rings; slipping through a ring's gap shatters it.
  */
 class EscapeRings implements Game {
+  events = 0; readonly lead = 1.5;
   private rings: { r: number; rot: number; spin: number; hue: number }[] = [];
   private ball = { x: 0, y: 0, vx: 0, vy: 0, hue: 0 };
   private parts: Particle[] = []; private wait = 0; private hue: number;
@@ -408,6 +433,9 @@ class EscapeRings implements Game {
           this.parts.push({ x: this.cx + Math.cos(a) * ring.r, y: this.cy + Math.sin(a) * ring.r, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.6 + this.rand() * 0.6, c: hsv(ring.hue, 0.7, 1) });
         }
         this.rings.shift();
+        this.events++;
+        // Tension rises: every ring that's left spins a little faster.
+        for (const r of this.rings) r.spin *= 1.18;
         continue;
       }
       const nx = dx / d, ny = dy / d, dot = b.vx * nx + b.vy * ny;
@@ -429,6 +457,7 @@ class EscapeRings implements Game {
 
 /** A ball that grows a little on every bounce until it fills the circle. */
 class GrowBall implements Game {
+  events = 0; readonly lead = 5; // open with it nearly full, then pop
   private b = { x: 0, y: 0, vx: 0, vy: 0, r: 10, hue: 0 };
   private bounces = 0; private flash = 0; private hue: number; private parts: Particle[] = [];
   private readonly cx = GAME_W / 2; private readonly cy = GAME_H / 2 + 4; private readonly R = 212;
@@ -455,7 +484,7 @@ class GrowBall implements Game {
       const sp = Math.hypot(b.vx, b.vy), target = Math.max(380, Math.min(760, sp));
       b.vx *= target / sp; b.vy *= target / sp;
       b.x = this.cx + nx * Math.max(0, this.R - b.r - 0.5); b.y = this.cy + ny * Math.max(0, this.R - b.r - 0.5);
-      if (b.r >= this.R * 0.93) { this.flash = 1; this.reset(); break; }
+      if (b.r >= this.R * 0.93) { this.flash = 1; this.events++; this.reset(); break; }
     }
   }
   draw(c: Canvas) {
@@ -485,9 +514,27 @@ export function makeGame(id: string, seed: number): Game {
  * Renders `frames` frames, handing each RGB buffer to `emit`. A short warm-up
  * runs first so the footage starts mid-action, not on an empty board.
  */
+/**
+ * Where the footage should start: `lead` seconds before the first payoff, so
+ * the clip opens on build-up and pays off almost at once (the hook), instead
+ * of on an empty board. Deterministic: same id + seed → same start.
+ */
+export function hookStartSteps(id: string, seed: number, fps: number): number {
+  const game = makeGame(id, seed), dt = 1 / fps;
+  const lead = Math.round((game.lead ?? 0) * fps), minStep = lead + Math.round(fps * 0.5);
+  if (!game.lead) return fps * 4;
+  for (let i = 0; i < fps * 60; i++) {
+    const before = game.events;
+    game.step(dt);
+    if (game.events > before && i >= minStep) return i - lead;
+  }
+  return fps * 4;
+}
+
 export async function renderGame(id: string, seed: number, fps: number, frames: number, emit: (rgb: Uint8Array) => Promise<void> | void): Promise<void> {
   const game = makeGame(id, seed), canvas = new Canvas(), dt = 1 / fps;
-  for (let i = 0; i < fps * 4; i++) game.step(dt);
+  const warm = hookStartSteps(id, seed, fps);
+  for (let i = 0; i < warm; i++) game.step(dt);
   for (let f = 0; f < frames; f++) {
     game.step(dt);
     game.draw(canvas);

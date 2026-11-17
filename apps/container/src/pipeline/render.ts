@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ffmpeg, ffmpegFromStdin, probe } from "../lib/proc";
-import { GAME_H, GAME_W, GAMES, renderGame } from "./games";
+import { GAME_H, GAME_HOOKS, GAME_W, GAMES, renderGame } from "./games";
 import { buildAss, type CapWord } from "./captions";
 
 /** Grid proxy (§7.1): 9:16 centre crop, 360×640, CRF 30 — ~15 % of a final's cost. */
@@ -131,7 +131,12 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   v = "[v0]";
   if (bg) {
     const bh = h - topH;
-    filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" && !isGame ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}[bgv]`);
+    // Games carry their challenge line ("WILL IT ESCAPE?") along the bottom.
+    const hookLine = isGame && bg.kind === "builtin" ? GAME_HOOKS[bg.id] : null;
+    const label = hookLine && existsSync(join(FONTS_DIR, "Anton-Regular.ttf"))
+      ? `,drawtext=fontfile='${join(FONTS_DIR, "Anton-Regular.ttf")}':text='${dt(hookLine)}':fontsize=${Math.round(bh * 0.072)}:fontcolor=white:borderw=${Math.max(3, Math.round(bh * 0.008))}:bordercolor=black:x=(w-text_w)/2:y=h-text_h-${Math.round(bh * 0.05)}`
+      : "";
+    filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" && !isGame ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}${label}[bgv]`);
     filters.push(`[v0][bgv]vstack=inputs=2:shortest=1[vs]`);
     v = "[vs]";
   }
