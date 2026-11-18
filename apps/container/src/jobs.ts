@@ -13,7 +13,7 @@ import { chatNominations, nominateMoments } from "./pipeline/moments";
 import { chatSpikes, type ChatSignal } from "./pipeline/chat";
 import { alignSection, buildZoneAudio, downloadAudioOnly, downloadHlsSection, downloadSection, hlsPlaylist, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
 import { isSiteUrl } from "./pipeline/ingest";
-import { refineWithLLM } from "./pipeline/llm-scoring";
+import { ensureHeadlines, refineWithLLM } from "./pipeline/llm-scoring";
 import { MIN_CLIP_MS, snapBoundaries } from "./pipeline/boundaries";
 import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
 import { buildSrt } from "./pipeline/captions";
@@ -229,6 +229,8 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const longEnough = snapped.filter((c) => c.t_out_ms - c.t_in_ms >= MIN_CLIP_MS - 500);
     if (longEnough.length < snapped.length) stage(`dropped ${snapped.length - longEnough.length} moments under ${MIN_CLIP_MS / 1000} s`);
     const picked = selectMMR(longEnough.length ? longEnough : snapped, n);
+    const filled = await ensureHeadlines(picked, source);
+    if (filled) stage(`headlines written for ${filled} more clips`);
 
     // 5. Thumbnails only — NO preview videos. The shortlist and the editor
     // play each clip straight from the media (start/end + centre crop in the

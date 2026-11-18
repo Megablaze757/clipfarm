@@ -31,7 +31,7 @@ Score every dimension 0-10 using these anchors (be harsh; most moments are 3-6):
 Also return:
 - category: one of story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable, reveal
 - title: a scroll-stopping title, max 8 words, no hashtags/emojis, no clickbait the clip doesn't deliver
-- context_title: the HEADLINE burned on screen for the WHOLE clip — the context a stranger needs, the way viral clip pages write them. WHO (the real name: the streamer/channel from the source line, or a name said in the clip; else a role like "DOCTOR", "COMEDIAN", "STREAMER") + WHAT happens, present tense, 4-9 words, specific and vivid. Examples: "KAI CENAT CRASHES OUT AT FAST FOOD WORKER", "DOCTOR EXPLAINS WHY YOU WAKE UP AT 3AM", "STREAMER'S MOM WALKS IN MID-RANT". Don't give away the punchline word for word, don't invent names or events that aren't in the clip, no emojis/hashtags
+- context_title: the HEADLINE burned on screen for the WHOLE clip — the context a stranger needs, the way viral clip pages write them. WHO (the real name: the streamer/channel from the source line, or a name said in the clip; else a role like "DOCTOR", "COMEDIAN", "STREAMER") + WHAT happens, present tense, 4-9 words, specific and vivid. Examples: "KAI CENAT CRASHES OUT AT FAST FOOD WORKER", "DOCTOR EXPLAINS WHY YOU WAKE UP AT 3AM", "STREAMER'S MOM WALKS IN MID-RANT". Don't give away the punchline word for word, don't invent names or events that aren't in the clip, no emojis/hashtags. If the source line names the channel/streamer, the clip is THEIR content: name them (as people know them — "KaiCenat" → "KAI CENAT"), never a generic "STREAMER"/"HOST"
 - hook_line: the strongest opening line, copied from the excerpt
 - trim_start_words: how many words to cut from the START so the clip opens on its hook (0 if it already does; never cut needed context)
 - trim_end_words: how many words to cut from the END to drop a trailing ramble (0 if the ending is right)
@@ -123,7 +123,7 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
 
         if (typeof j.title === "string" && j.title.trim()) c.features.title = j.title.trim().slice(0, 80);
         if (typeof j.context_title === "string" && j.context_title.trim()) {
-          c.features.context_title = j.context_title.replace(/[#\u{1F300}-\u{1FAFF}]/gu, "").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 70);
+          c.features.context_title = cleanHeadline(j.context_title, source);
         }
         if (typeof j.hook_line === "string" && j.hook_line.trim()) c.features.hook_line = j.hook_line.trim().slice(0, 140);
         if (typeof j.category === "string" && j.category.trim()) c.features.category = j.category.trim().slice(0, 30);
@@ -134,4 +134,43 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         refined++;
       }
   }
+}
+
+
+/** "KaiCenat" / "kai_cenat" → "KAI CENAT": how a channel name reads in a headline. */
+export function displayName(creator?: string): string | null {
+  const n = (creator ?? "").replace(/[_.-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/\s+/g, " ").trim();
+  return n ? n.toUpperCase() : null;
+}
+
+/** Uppercase, no emojis/hashtags, and a generic "STREAMER …" becomes the real name when we know it. */
+export function cleanHeadline(raw: string, source: SourceInfo = {}): string {
+  let h = raw.replace(/#\S+/g, "").replace(/[#\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "").replace(/\s+/g, " ").trim().toUpperCase();
+  const name = displayName(source.creator);
+  if (name) h = h.replace(/^(THE\s+)?(STREAMER|HOST|YOUTUBER|CREATOR|GAMER)('S)?\b/, (_m, _the, _w, poss) => name + (poss ?? ""));
+  return h.slice(0, 70);
+}
+
+/**
+ * Every picked clip gets a headline: any the judge didn't write (it skipped
+ * the clip, or the batch failed) are written in one short follow-up call —
+ * and if even that fails, a plain "NAME — TITLE" fallback.
+ */
+export async function ensureHeadlines(cands: Candidate[], source: SourceInfo = {}): Promise<number> {
+  const missing = cands.filter((c) => !c.features.context_title);
+  if (!missing.length) return 0;
+  const sys = `You write the on-screen HEADLINE for short clips cut from a long video: WHO (the real name — the channel/streamer from the source line, or a name said in the clip; never a generic "STREAMER") + WHAT happens, present tense, 4-9 words, ALL CAPS, specific and vivid, e.g. "KAI CENAT CRASHES OUT AT FAST FOOD WORKER". Don't invent anything that isn't in the clip. Respond ONLY with JSON: {"headlines":[{"id":number,"headline":"..."}]}`;
+  const user = sourceLine(source) + missing.map((c, k) => `### id ${k}\n${c.text.slice(0, 1200)}`).join("\n\n");
+  const res = await llm(sys, user, 900).catch(() => null);
+  const parsed = res ? parseJsonObject<{ headlines?: { id: number; headline: string }[] }>(res.text) : null;
+  for (const h of parsed?.headlines ?? []) {
+    const c = missing[Number(h.id)];
+    if (c && typeof h.headline === "string" && h.headline.trim()) c.features.context_title = cleanHeadline(h.headline, source);
+  }
+  const name = displayName(source.creator);
+  for (const c of missing) {
+    if (c.features.context_title || !c.features.title) continue;
+    c.features.context_title = cleanHeadline(name ? `${name} — ${c.features.title}` : c.features.title, source);
+  }
+  return missing.filter((c) => c.features.context_title).length;
 }

@@ -399,3 +399,13 @@ test("context headline wraps into balanced lines; web copy matches", () => {
   const web = fs.readFileSync(path.join(__dirname, "../../web/src/lib/headline.ts"), "utf8");
   assert.match(web, /cur\.length >= target && lines\.length < n - 1/);
 });
+
+test("headlines use the creator's real name, never a generic 'STREAMER'", () => {
+  const { cleanHeadline, displayName } = require("../dist/pipeline/llm-scoring");
+  assert.equal(displayName("KaiCenat"), "KAI CENAT");
+  assert.equal(displayName("kai_cenat"), "KAI CENAT");
+  const src = { creator: "KaiCenat" };
+  assert.equal(cleanHeadline("Streamer orders crazy GTA meal 😂 #fyp", src), "KAI CENAT ORDERS CRAZY GTA MEAL");
+  assert.equal(cleanHeadline("STREAMER'S MOM WALKS IN", src), "KAI CENAT'S MOM WALKS IN");
+  assert.equal(cleanHeadline("Doctor explains sleep", {}), "DOCTOR EXPLAINS SLEEP");
+});

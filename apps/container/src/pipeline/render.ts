@@ -172,8 +172,8 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     // The context headline, viral-page style: black text on white boxes, one
     // per line, stacked near the top (top of the speaker half in split screen).
     const [a, b] = o.t_ms;
-    const fs = Math.round(w * 0.052), pad = Math.round(fs * 0.32), lineH = fs + pad * 2 + Math.round(fs * 0.12);
-    const lines = wrapHeadline(o.text.toUpperCase(), 22).slice(0, 3);
+    const fs = Math.round(w * 0.06), pad = Math.round(fs * 0.3), lineH = fs + pad * 2 + Math.round(fs * 0.12);
+    const lines = wrapHeadline(o.text.toUpperCase(), 20).slice(0, 3);
     const y0 = Math.round(h * (bg ? 0.035 : 0.1));
     const when = `enable='between(t,${(a / 1000).toFixed(2)},${(b / 1000).toFixed(2)})'`;
     lines.forEach((line, k) => {

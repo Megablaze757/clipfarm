@@ -317,8 +317,8 @@ function Studio() {
               {state.overlay && (
                 // The context headline — same look as the export: black on white boxes, whole clip.
                 <div className={`absolute inset-x-3 flex flex-col items-center gap-[3px] pointer-events-none ${split ? 'top-[3.5%]' : 'top-[10%]'}`}>
-                  {wrapHeadline(state.overlay.toUpperCase(), 22).slice(0, 3).map((line, k) => (
-                    <span key={k} className="bg-white text-black text-[12px] leading-tight px-1.5 py-0.5" style={{ fontFamily: 'Montserrat, "Arial Black", sans-serif', fontWeight: 800 }}>{line}</span>
+                  {wrapHeadline(state.overlay.toUpperCase(), 20).slice(0, 3).map((line, k) => (
+                    <span key={k} className="bg-white text-black text-[14px] leading-tight px-1.5 py-0.5" style={{ fontFamily: 'Montserrat, "Arial Black", sans-serif', fontWeight: 800 }}>{line}</span>
                   ))}
                 </div>
               )}
