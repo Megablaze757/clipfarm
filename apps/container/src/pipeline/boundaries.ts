@@ -53,15 +53,37 @@ export function extendToMin(words: Word[], i0: number, i1: number): [number, num
     if (i1 + 1 < words.length) {
       let e = i1 + 1;
       while (e + 1 < words.length && !endsSentence(words[e].w) && e - i1 < 60) e++;
-      if (dur(i0, e) <= EXTEND_CAP_MS) { i1 = e; grew = true; }
+      // Only a REAL sentence end (or a pause) — not "60 words of run-on speech".
+      const natural = endsSentence(words[e].w) || e + 1 >= words.length || words[e + 1].t0 - words[e].t1 >= 400;
+      if (natural && dur(i0, e) <= EXTEND_CAP_MS) { i1 = e; grew = true; }
     }
     if (dur(i0, i1) >= MIN_CLIP_MS) break;
     if (i0 > 0) {
       let s = i0 - 1;
       while (s > 0 && !endsSentence(words[s - 1].w) && i0 - s < 60) s--;
-      if (dur(s, i1) <= EXTEND_CAP_MS) { i0 = s; grew = true; }
+      const natural = s === 0 || endsSentence(words[s - 1].w) || words[s].t0 - words[s - 1].t1 >= 400;
+      if (natural && dur(s, i1) <= EXTEND_CAP_MS) { i0 = s; grew = true; }
     }
     if (!grew) break;
+  }
+  if (dur(i0, i1) >= MIN_CLIP_MS) return [i0, i1];
+
+  // Whole sentences didn't fit — common on streams, where speech runs on
+  // without punctuation, and at the edge of a long stream's hot zone. Grow
+  // word by word instead, to the first natural PAUSE that reaches the
+  // minimum: forward first (the reaction), then back (the setup). Never
+  // across a silence over 3 s (a zone edge / a different moment).
+  const PAUSE = 250, BREAK = 3000;
+  for (let e = i1 + 1; e < words.length && words[e].t0 - words[e - 1].t1 < BREAK && dur(i0, e) <= EXTEND_CAP_MS; e++) {
+    const pauseAfter = e + 1 < words.length ? words[e + 1].t0 - words[e].t1 : PAUSE;
+    if (dur(i0, e) >= MIN_CLIP_MS && (pauseAfter >= PAUSE || endsSentence(words[e].w))) { i1 = e; break; }
+    if (e + 1 >= words.length || dur(i0, e + 1) > EXTEND_CAP_MS || words[e + 1].t0 - words[e].t1 >= BREAK) { i1 = e; break; }
+  }
+  if (dur(i0, i1) >= MIN_CLIP_MS) return [i0, i1];
+  for (let s = i0 - 1; s >= 0 && words[s + 1].t0 - words[s].t1 < BREAK && dur(s, i1) <= EXTEND_CAP_MS; s--) {
+    const pauseBefore = s > 0 ? words[s].t0 - words[s - 1].t1 : PAUSE;
+    if (dur(s, i1) >= MIN_CLIP_MS && (pauseBefore >= PAUSE || (s > 0 && endsSentence(words[s - 1].w)))) { i0 = s; break; }
+    i0 = s;
   }
   return [i0, i1];
 }

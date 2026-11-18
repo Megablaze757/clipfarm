@@ -14,7 +14,7 @@ import { chatSpikes, type ChatSignal } from "./pipeline/chat";
 import { alignSection, buildZoneAudio, downloadAudioOnly, downloadHlsSection, downloadSection, hlsPlaylist, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
 import { isSiteUrl } from "./pipeline/ingest";
 import { refineWithLLM } from "./pipeline/llm-scoring";
-import { snapBoundaries } from "./pipeline/boundaries";
+import { MIN_CLIP_MS, snapBoundaries } from "./pipeline/boundaries";
 import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
 import { buildSrt } from "./pipeline/captions";
 
@@ -219,7 +219,13 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const heuristicPicks = selectMMR(scored, Math.min(scored.length, Math.max(n * 2, 12)), 0.2);
     const shortlist = [...nominated.slice(0, Math.max(n * 3, 20)), ...heuristicPicks];
     const { model } = await refineWithLLM(shortlist, words);
-    const picked = snapBoundaries(selectMMR(shortlist, n), words, envelope);
+    // Edges are snapped BEFORE selection, so a moment that still can't make a
+    // proper clip (under the minimum length) is dropped and the next-best
+    // takes its place — instead of shipping a context-free one-liner.
+    const snapped = snapBoundaries(shortlist, words, envelope);
+    const longEnough = snapped.filter((c) => c.t_out_ms - c.t_in_ms >= MIN_CLIP_MS - 500);
+    if (longEnough.length < snapped.length) stage(`dropped ${snapped.length - longEnough.length} moments under ${MIN_CLIP_MS / 1000} s`);
+    const picked = selectMMR(longEnough.length ? longEnough : snapped, n);
 
     // 5. Thumbnails only — NO preview videos. The shortlist and the editor
     // play each clip straight from the media (start/end + centre crop in the

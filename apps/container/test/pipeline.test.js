@@ -371,3 +371,20 @@ test("long streams: HLS playlist → exact segment times for clip downloads", ()
   const fmp4 = parseHlsPlaylist('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:2,\nseg1.m4s\n', "https://x.test/v/p.m3u8");
   assert.equal(fmp4.init, "https://x.test/v/init.mp4");
 });
+
+test("short stream moments grow to 15 s at a pause, never across a zone gap", () => {
+  const { extendToMin, MIN_CLIP_MS } = require("../dist/pipeline/boundaries");
+  // Run-on speech, no punctuation: 0.4 s words, a 300 ms pause every 12 words.
+  const words = []; let t = 0;
+  for (let i = 0; i < 200; i++) { words.push({ w: "yo", t0: t, t1: t + 300, conf: 0.9, speaker: "S1" }); t += 300 + (i % 12 === 11 ? 300 : 100); }
+  const [a, b] = extendToMin(words, 100, 120); // ~8 s moment mid-stream
+  const dur = words[b].t1 - words[a].t0;
+  assert.ok(dur >= MIN_CLIP_MS && dur <= 35_000, `run-on: ${dur} ms`);
+  assert.ok(b + 1 >= words.length || words[b + 1].t0 - words[b].t1 >= 250, "ends on a pause");
+  // Moment at the END of a hot zone: the next words are an hour later → grow backwards.
+  const zone = words.slice(0, 120).map((w) => ({ ...w }));
+  for (let i = 0; i < 30; i++) zone.push({ w: "later", t0: 3_600_000 + i * 400, t1: 3_600_000 + i * 400 + 300, conf: 0.9, speaker: "S1" });
+  const [c, d] = extendToMin(zone, 100, 119);
+  assert.ok(d <= 119, "never crosses into the next zone");
+  assert.ok(zone[d].t1 - zone[c].t0 >= MIN_CLIP_MS, `zone edge: ${zone[d].t1 - zone[c].t0} ms`);
+});
