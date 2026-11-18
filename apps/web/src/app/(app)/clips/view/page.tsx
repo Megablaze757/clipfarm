@@ -8,6 +8,7 @@ import { autoReframe, cxAt, type Keyframe } from '@/lib/reframe'
 import { GAMES } from '@/lib/games'
 import { GamePreview } from '@/components/game-preview'
 import { formatPrecise } from '@/lib/tokens'
+import { wrapHeadline } from '@/lib/headline'
 
 interface Word { i: number; w: string; t0: number; t1: number; speaker?: string }
 interface Render { id: string; preset: string; status: string; download_url: string | null; error_code?: string | null }
@@ -313,7 +314,14 @@ function Studio() {
                   })()}
                 </div>
               )}
-              {state.overlay && rel < 2500 && <div className="absolute top-[12%] inset-x-4 text-center"><span className="bg-black/60 text-white font-bold text-sm px-2 py-1 rounded">{state.overlay}</span></div>}
+              {state.overlay && (
+                // The context headline — same look as the export: black on white boxes, whole clip.
+                <div className={`absolute inset-x-3 flex flex-col items-center gap-[3px] pointer-events-none ${split ? 'top-[3.5%]' : 'top-[10%]'}`}>
+                  {wrapHeadline(state.overlay.toUpperCase(), 22).slice(0, 3).map((line, k) => (
+                    <span key={k} className="bg-white text-black text-[12px] leading-tight px-1.5 py-0.5" style={{ fontFamily: 'Montserrat, "Arial Black", sans-serif', fontWeight: 800 }}>{line}</span>
+                  ))}
+                </div>
+              )}
               {captionLine && (
                 <div className={`absolute inset-x-3 text-center pointer-events-none ${split ? 'top-1/2 -translate-y-1/2' : 'bottom-[22%]'}`}>
                   <span className={`inline-block px-2 py-1 rounded leading-snug ${state.style === 'bold_pop' ? 'text-[19px] tracking-wide' : 'text-[15px]'} ${state.style === 'neon_box' ? 'bg-black/70' : ''}`}
@@ -418,8 +426,15 @@ function Studio() {
               </div>
               <p className="text-[10px] text-slate-500">Upload your own gameplay recording (MP4/MOV/WebM, under 95 MB — a 1–3 minute loop is plenty; it loops and starts at a different point each export). Use footage you recorded or have the rights to. Uploads are deleted after 7 days.</p>
             </div>
-            <label className="block text-xs text-slate-400">Title card (first 2.5 s, optional)
-              <input value={state.overlay} maxLength={80} onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200" />
+            <label className="block text-xs text-slate-400">On-screen headline (shown for the whole clip)
+              <input value={state.overlay} maxLength={80} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />
+              <span className="block mt-1 text-[10px] text-slate-500">
+                Who + what happens, so a stranger gets the context instantly.
+                {data.candidate?.features?.context_title && state.overlay !== data.candidate.features.context_title && (
+                  <> Suggested: <button type="button" onClick={() => update((s) => ({ ...s, overlay: data.candidate!.features.context_title }))} className="underline text-indigo-300">{data.candidate.features.context_title}</button></>
+                )}
+                {state.overlay && <> · <button type="button" onClick={() => update((s) => ({ ...s, overlay: '' }))} className="underline">remove</button></>}
+              </span>
             </label>
           </section>
 

@@ -63,6 +63,8 @@ export interface Candidate {
     /** story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable */
     category?: string;
     hook_line?: string;
+    /** On-screen headline for the whole clip: who + what ("KAI CENAT CRASHES OUT AT …"). */
+    context_title?: string;
     /** Found by the whole-transcript nomination pass (moments.ts). */
     nominated?: boolean;
     /** Multiplier on the composite (e.g. 0.85 = not reviewed by the AI judge). */

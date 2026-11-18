@@ -301,7 +301,11 @@ async function createClip(req: Request, env: Env, caller: Caller): Promise<Respo
     candidate_id: cand.id, tenant_id: caller.tenantId,
     title: cand.features?.title ?? cand.rationale ?? null,
     t_in_ms: cand.t_in_ms, t_out_ms: cand.t_out_ms,
-    edits: { captions: { enabled: true, style: "karaoke_yellow", edits: [] }, layout: { mode: "auto", aspect: "9:16" } },
+    edits: {
+      captions: { enabled: true, style: "karaoke_yellow", edits: [] }, layout: { mode: "auto", aspect: "9:16" },
+      // The engine's context headline ("KAI CENAT CRASHES OUT AT …"), editable in the editor.
+      ...(cand.features?.context_title ? { title_overlay: String(cand.features.context_title).slice(0, 80) } : {}),
+    },
   });
   return json({ id: clip.id }, 201);
 }

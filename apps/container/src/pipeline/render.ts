@@ -54,6 +54,23 @@ export function builtinBackground(id: string, durS: number, fps: number): string
 let bgSource = (key: string) => key;
 export function setBackgroundSource(fn: (key: string) => string) { bgSource = fn; }
 const hashOf = (s: string) => { let x = 2166136261; for (const c of s) x = Math.imul(x ^ c.charCodeAt(0), 16777619) >>> 0; return x; };
+/** Breaks a headline into balanced lines of at most ~max characters. */
+export function wrapHeadline(text: string, max: number): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const total = words.join(" ").length;
+  const n = Math.max(1, Math.ceil(total / max));
+  const target = total / n;
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (cur && (next.length > max || (cur.length >= target && lines.length < n - 1))) { lines.push(cur); cur = w; }
+    else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 const dt = (s: string) => s.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\u2019").replace(/%/g, "\\%");
 
 /**
@@ -152,9 +169,17 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   }
   for (const o of spec.overlays ?? []) {
     if (o.type !== "title" || !o.text) continue;
+    // The context headline, viral-page style: black text on white boxes, one
+    // per line, stacked near the top (top of the speaker half in split screen).
     const [a, b] = o.t_ms;
-    filters.push(`${v}drawtext=fontfile=${FONT}:text='${dt(o.text)}':fontsize=${Math.round(w * 0.058)}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=${Math.round(w * 0.02)}:x=(w-text_w)/2:y=h*0.12:enable='between(t,${a / 1000},${b / 1000})'[v${n}]`);
-    v = `[v${n++}]`;
+    const fs = Math.round(w * 0.052), pad = Math.round(fs * 0.32), lineH = fs + pad * 2 + Math.round(fs * 0.12);
+    const lines = wrapHeadline(o.text.toUpperCase(), 22).slice(0, 3);
+    const y0 = Math.round(h * (bg ? 0.035 : 0.1));
+    const when = `enable='between(t,${(a / 1000).toFixed(2)},${(b / 1000).toFixed(2)})'`;
+    lines.forEach((line, k) => {
+      filters.push(`${v}drawtext=fontfile='${FONT}':text='${dt(line)}':fontsize=${fs}:fontcolor=black:box=1:boxcolor=white:boxborderw=${pad}:x=(w-text_w)/2:y=${y0 + k * lineH + pad}:${when}[v${n}]`);
+      v = `[v${n++}]`;
+    });
   }
   if (spec.watermark) {
     // FR-11.6 — applied whenever the Worker says so; the client can't turn it off.

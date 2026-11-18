@@ -23,6 +23,11 @@ export interface Nomination {
   why: string;
 }
 
+/** What the engine knows about the source: its title and who made it (channel / streamer). */
+export interface SourceInfo { title?: string; creator?: string }
+export const sourceLine = (s: SourceInfo) =>
+  s.title || s.creator ? `Source: ${s.title ? `"${s.title}"` : "untitled"}${s.creator ? ` — channel/streamer: ${s.creator}` : ""}\n\n` : "";
+
 export const CATEGORIES = ["story", "hot_take", "surprising_fact", "funny", "practical_tip", "emotional", "debate", "quotable", "reveal"] as const;
 
 const SYSTEM = `You are the best short-form video editor in the world. You cut long podcasts and streams into clips that go viral on TikTok, Reels and Shorts.
@@ -31,7 +36,7 @@ You will get a numbered transcript block. Nominate the moments worth clipping. W
 - PAYOFF: it opens a curiosity gap and closes it inside the clip (setup → answer, story → twist, joke → punchline).
 - HIGH-AROUSAL EMOTION: amusement, awe, outrage, anxiety, excitement. Calm or sad-and-flat moments rarely spread.
 - SHAREABLE: a take people will argue about, advice they'd send a friend, something that says who the viewer is.
-- STANDALONE: a stranger understands it with no context. Reject moments that depend on "he/they/that thing" from earlier.
+- STANDALONE: a stranger understands it. Every clip gets an on-screen HEADLINE that can supply WHO and WHERE (e.g. "KAI CENAT CRASHES OUT AT FAST FOOD WORKER"), so a moment only needs that one line of context to land — but reject moments that depend on a long story from earlier.
 - TIGHT: 15-60 seconds is ideal; up to 90 if the story needs it. No slow wind-up.
 Lines marked >>CHAT<< are where the live audience reacted hardest (chat reacts a few seconds after the moment, so the moment is usually on or just before that line). Treat them as strong leads, but only nominate them if the moment works as a clip.
 Categories: ${CATEGORIES.join(", ")}.
@@ -41,7 +46,7 @@ Respond ONLY with JSON: {"moments":[{"start":<sentence number>,"end":<sentence n
 const BLOCK_MS = 10 * 60 * 1000;
 const OVERLAP_SENTENCES = 6;
 
-export async function nominateMoments(words: Word[], sents: Sentence[], maxPerBlock = 6, chat: ChatSignal | null = null): Promise<Nomination[]> {
+export async function nominateMoments(words: Word[], sents: Sentence[], maxPerBlock = 6, chat: ChatSignal | null = null, source: SourceInfo = {}): Promise<Nomination[]> {
   if (!sents.length) return [];
   const blocks: { from: number; to: number }[] = [];
   let from = 0;
@@ -65,7 +70,7 @@ export async function nominateMoments(words: Word[], sents: Sentence[], maxPerBl
         const mark = spike ? `  >>CHAT<< ${CHAT_LABEL[spike.kind]} ${spike.ratio}x: "${spike.sample.slice(0, 2).join('", "')}"` : "";
         lines.push(`[${s}] (${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}) ${textOf(words, sents[s].i0, sents[s].i1)}${mark}`);
       }
-      const res = await llm(SYSTEM, `Nominate up to ${maxPerBlock} moments.\n\n${lines.join("\n")}`.slice(0, 55_000), 1500);
+      const res = await llm(SYSTEM, `${sourceLine(source)}Nominate up to ${maxPerBlock} moments.\n\n${lines.join("\n")}`.slice(0, 55_000), 1500);
       const parsed = res ? parseJsonObject<{ moments?: { start: number; end: number; category?: string; hook?: string; why?: string }[] }>(res.text) : null;
       return (parsed?.moments ?? []).flatMap((m) => {
         const s0 = Math.round(Number(m.start)), s1 = Math.round(Number(m.end));

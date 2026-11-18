@@ -3,6 +3,7 @@ import { llm, parseJsonObject } from "../lib/worker";
 import { finalScore } from "./scoring";
 import { MIN_CLIP_MS } from "./boundaries";
 import { textOf } from "./text";
+import { sourceLine, type SourceInfo } from "./moments";
 
 /**
  * Pass 2 of the clip engine: JUDGING. Batches of 12 candidates per call
@@ -25,20 +26,21 @@ Score every dimension 0-10 using these anchors (be harsh; most moments are 3-6):
 - payoff: does it open a question or tension and RESOLVE it inside the clip? 9-10 setup→twist/punchline/answer; 5 informative but flat; 0-2 never resolves or resolves off-clip.
 - emotion: intensity of HIGH-AROUSAL emotion — amusement, awe, outrage, anxiety, excitement. 9-10 laugh-out-loud or jaw-drop; 5 mildly interesting; 0-2 calm/flat/sad-and-slow.
 - shareability: would someone send it to a friend, stitch it, or argue in comments? 9-10 hot take / "tag someone who" / must-know tip; 0-2 nobody would share.
-- self_contained: is everyone and everything referred to introduced inside the clip? 0-2 if it depends on earlier context ("he", "that thing we said").
+- self_contained: can a stranger follow it WITH its on-screen headline (below)? The headline can name who it is and where they are; 0-2 only if it needs more than one line of context (a long story from earlier).
 - complete: does it end on a finished thought or punchline (ideally a satisfying or loopable last line)? 0-2 if it ends mid-argument.
 Also return:
 - category: one of story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable, reveal
 - title: a scroll-stopping title, max 8 words, no hashtags/emojis, no clickbait the clip doesn't deliver
+- context_title: the HEADLINE burned on screen for the WHOLE clip — the context a stranger needs, the way viral clip pages write them. WHO (the real name: the streamer/channel from the source line, or a name said in the clip; else a role like "DOCTOR", "COMEDIAN", "STREAMER") + WHAT happens, present tense, 4-9 words, specific and vivid. Examples: "KAI CENAT CRASHES OUT AT FAST FOOD WORKER", "DOCTOR EXPLAINS WHY YOU WAKE UP AT 3AM", "STREAMER'S MOM WALKS IN MID-RANT". Don't give away the punchline word for word, don't invent names or events that aren't in the clip, no emojis/hashtags
 - hook_line: the strongest opening line, copied from the excerpt
 - trim_start_words: how many words to cut from the START so the clip opens on its hook (0 if it already does; never cut needed context)
 - trim_end_words: how many words to cut from the END to drop a trailing ramble (0 if the ending is right)
 - rationale: why it will (or won't) perform, max 12 words
-Respond ONLY with JSON: {"clips":[{"id":number,"hook":n,"payoff":n,"emotion":n,"shareability":n,"self_contained":n,"complete":n,"category":"...","title":"...","hook_line":"...","trim_start_words":n,"trim_end_words":n,"rationale":"..."}]}`;
+Respond ONLY with JSON: {"clips":[{"id":number,"hook":n,"payoff":n,"emotion":n,"shareability":n,"self_contained":n,"complete":n,"category":"...","title":"...","context_title":"...","hook_line":"...","trim_start_words":n,"trim_end_words":n,"rationale":"..."}]}`;
 
 interface Judged {
   id: number; hook: number; payoff: number; emotion: number; shareability: number; self_contained: number; complete: number;
-  category?: string; title?: string; hook_line?: string; trim_start_words?: number; trim_end_words?: number; rationale?: string;
+  category?: string; title?: string; context_title?: string; hook_line?: string; trim_start_words?: number; trim_end_words?: number; rationale?: string;
 }
 
 /** 0-10 (or 0-1, or 0-100) → 0-1. */
@@ -51,7 +53,7 @@ const n01 = (v: unknown) => {
 /** Score multiplier for clips the AI never reviewed, once others have been. */
 export const UNREVIEWED_PENALTY = 0.85;
 
-export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize = 12): Promise<{ refined: number; model: string | null }> {
+export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize = 12, source: SourceInfo = {}): Promise<{ refined: number; model: string | null }> {
   let refined = 0;
   let model: string | null = null;
 
@@ -89,7 +91,7 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         const hint = (c.features.nominated ? ` (editor flagged: ${c.features.category ?? "moment"})` : "") + chat;
         return `### id ${k} — ${secs}s${hint}\n${c.text.slice(0, 1600)}`;
       }).join("\n\n");
-      const res = await llm(SYSTEM, user, 2600);
+      const res = await llm(SYSTEM, sourceLine(source) + user, 3000);
       const parsed = res ? parseJsonObject<{ clips?: Judged[] }>(res.text) : null;
       if (!parsed?.clips?.length) return;
       model = res!.model;
@@ -120,6 +122,9 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         }
 
         if (typeof j.title === "string" && j.title.trim()) c.features.title = j.title.trim().slice(0, 80);
+        if (typeof j.context_title === "string" && j.context_title.trim()) {
+          c.features.context_title = j.context_title.replace(/[#\u{1F300}-\u{1FAFF}]/gu, "").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 70);
+        }
         if (typeof j.hook_line === "string" && j.hook_line.trim()) c.features.hook_line = j.hook_line.trim().slice(0, 140);
         if (typeof j.category === "string" && j.category.trim()) c.features.category = j.category.trim().slice(0, 30);
         if (typeof j.rationale === "string" && j.rationale.trim()) c.rationale = j.rationale.trim().split(/\s+/).slice(0, 12).join(" ");

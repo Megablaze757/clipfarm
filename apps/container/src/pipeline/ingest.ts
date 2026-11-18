@@ -39,7 +39,7 @@ export function isSiteUrl(u: string): boolean {
   try { return SITE_RE.test(new URL(u).hostname); } catch { return false; }
 }
 
-export async function fetchSource(source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string }, dir: string): Promise<{ path: string; title?: string }> {
+export async function fetchSource(source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string }, dir: string): Promise<{ path: string; title?: string; creator?: string }> {
   if (source.kind === "upload") {
     const ext = source.r2_key.slice(source.r2_key.lastIndexOf("."));
     const path = join(dir, `source${ext}`);
@@ -105,7 +105,7 @@ export function classifyYtDlpError(msg: string): StageError {
   return new StageError("E_INGEST_CORRUPT", `Couldn't download that link: ${msg.slice(-300)}`);
 }
 
-async function downloadWithYtDlp(url: URL, dir: string): Promise<{ path: string; title?: string }> {
+async function downloadWithYtDlp(url: URL, dir: string): Promise<{ path: string; title?: string; creator?: string }> {
   const bin = process.env.YTDLP_BIN || "yt-dlp";
   const common = [
     "--no-playlist", "--no-progress", "--restrict-filenames",
@@ -115,14 +115,15 @@ async function downloadWithYtDlp(url: URL, dir: string): Promise<{ path: string;
     "--max-filesize", "15G",
     "--concurrent-fragments", "8",
     "--retries", "3",
-    "--print", "title", "--no-simulate",
+    "--print", "title", "--print", "%(uploader,channel,creator|)s", "--no-simulate",
     "-o", join(dir, "source.%(ext)s"),
   ];
   try {
     const { stdout } = await run(bin, [...common, url.toString()], { timeoutMs: 45 * 60 * 1000 });
     const file = (await readdir(dir)).find((f) => f.startsWith("source.") && !f.endsWith(".part"));
     if (!file) throw new Error("yt-dlp produced no file");
-    return { path: join(dir, file), title: stdout.trim().split("\n")[0]?.slice(0, 200) || undefined };
+    const [t, who] = stdout.trim().split("\n");
+    return { path: join(dir, file), title: t?.slice(0, 200) || undefined, creator: who?.trim().slice(0, 80) || undefined };
   } catch (e) {
     const msg = String((e as Error).message);
     console.warn(`yt-dlp failed: ${msg.slice(-400)}`);

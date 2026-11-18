@@ -107,6 +107,7 @@ function ProjectView() {
                 </div>
                 <div className="space-y-2 flex-1">
                   {c.features?.category && <span className="inline-block text-[10px] font-bold uppercase tracking-wide text-amber-200 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md">{CATEGORY_LABELS[c.features.category] ?? c.features.category}</span>}
+                  {c.features?.context_title && <div className="inline-block bg-white text-black text-[11px] font-extrabold uppercase px-1.5 py-0.5 leading-tight">{c.features.context_title}</div>}
                   {c.features?.title && <h3 className="text-sm font-bold text-white leading-snug">{c.features.title}</h3>}
                   {c.features?.hook_line && <p className="text-xs text-slate-200 italic">“{c.features.hook_line}”</p>}
                   <p className="text-xs text-slate-300"><span className="text-slate-500">Why: </span>{c.rationale}</p>

@@ -388,3 +388,14 @@ test("short stream moments grow to 15 s at a pause, never across a zone gap", ()
   assert.ok(d <= 119, "never crosses into the next zone");
   assert.ok(zone[d].t1 - zone[c].t0 >= MIN_CLIP_MS, `zone edge: ${zone[d].t1 - zone[c].t0} ms`);
 });
+
+test("context headline wraps into balanced lines; web copy matches", () => {
+  const { wrapHeadline } = require("../dist/pipeline/render");
+  const lines = wrapHeadline("KAI CENAT CRASHES OUT AT FAST FOOD WORKER", 22);
+  assert.deepEqual(lines, ["KAI CENAT CRASHES OUT", "AT FAST FOOD WORKER"]);
+  assert.ok(lines.every((l) => l.length <= 22));
+  assert.deepEqual(wrapHeadline("SHORT ONE", 22), ["SHORT ONE"]);
+  const fs = require("node:fs"), path = require("node:path");
+  const web = fs.readFileSync(path.join(__dirname, "../../web/src/lib/headline.ts"), "utf8");
+  assert.match(web, /cur\.length >= target && lines\.length < n - 1/);
+});

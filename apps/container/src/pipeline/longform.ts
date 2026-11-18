@@ -27,12 +27,12 @@ const YTDLP = () => process.env.YTDLP_BIN || "yt-dlp";
 
 export interface Zone { t0: number; t1: number } // stream time, ms
 
-export async function probeLink(url: string): Promise<{ durationMs: number; title?: string } | null> {
+export async function probeLink(url: string): Promise<{ durationMs: number; title?: string; creator?: string } | null> {
   try {
-    const { stdout } = await run(YTDLP(), ["--no-playlist", "--skip-download", "--print", "duration", "--print", "title", url], { timeoutMs: 120_000 });
-    const [d, title] = stdout.trim().split("\n");
+    const { stdout } = await run(YTDLP(), ["--no-playlist", "--skip-download", "--print", "duration", "--print", "title", "--print", "%(uploader,channel,creator|)s", url], { timeoutMs: 120_000 });
+    const [d, title, who] = stdout.trim().split("\n");
     const s = Number(d);
-    return Number.isFinite(s) && s > 0 ? { durationMs: Math.round(s * 1000), title: title?.slice(0, 200) } : null;
+    return Number.isFinite(s) && s > 0 ? { durationMs: Math.round(s * 1000), title: title?.slice(0, 200), creator: who?.trim().slice(0, 80) || undefined } : null;
   } catch (e) {
     throw classifyYtDlpError(String((e as Error).message));
   }

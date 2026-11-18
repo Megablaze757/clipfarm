@@ -55,6 +55,7 @@ export async function processPayload(env: Env, project: ProjectRow) {
     tenantId: project.tenant_id,
     source: project.source_kind === "upload" ? { kind: "upload", r2_key: project.source_uri } : { kind: "url", url: project.source_uri },
     options: project.options ?? {},
+    title: (project as { title?: string }).title ?? null,
     plan: {
       id: plan.id,
       clipsPerSource: plan.clipsPerSource,
@@ -168,7 +169,8 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
         .map((w) => (section ? { ...w, t0: w.t0 - section.offset, t1: w.t1 - section.offset } : w)),
     },
     background: edits.background?.kind === "builtin" || edits.background?.kind === "upload" ? edits.background : { kind: "none" },
-    overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, 2500] }] : [],
+    // The headline stays up for the whole clip — it's the context, not an intro card.
+    overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, clip.t_out_ms - clip.t_in_ms] }] : [],
     watermark: planFor(tenant?.plan).watermark, // FR-11.6 — decided here, never by the client
     audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },
     encode: { vcodec: "h264", crf: 21, preset: "veryfast", fps: preset.fps, faststart: true }, // veryfast: ~3x faster than medium; CRF 21 keeps quality well above what TikTok/Reels re-encode to

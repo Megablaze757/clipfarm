@@ -31,6 +31,7 @@ export interface ProcessJob {
   tenantId: string;
   source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string };
   options: { language?: string; clip_durations?: number[] | "auto"; max_clips?: number | null; chat_key?: string };
+  title?: string | null;
   plan: { id: string; clipsPerSource: number | null; maxSourceMinutes: number; remainingMinutes: number };
 }
 
@@ -61,7 +62,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
     // thumbnails seek directly. A link is downloaded once (it has to be).
     await setStatus(projectId, "transcoding", { progress: 5 });
     stage("ingest");
-    let input: string, inputArgs: string[], inputName: string, title: string | undefined;
+    let input: string, inputArgs: string[], inputName: string, title: string | undefined, creator: string | undefined;
     let long: { url: string; chatPath: Promise<string | null> } | null = null;
     if (job.source.kind === "upload") {
       // 8 parallel range requests, then everything reads the local file.
@@ -83,11 +84,11 @@ export async function processProject(job: ProcessJob): Promise<void> {
         chatPath.catch(() => {});
         input = await downloadAudioOnly(job.source.url, dir);
         stage(`long stream (${(linkInfo.durationMs / 3_600_000).toFixed(1)} h): audio in ${((Date.now() - t) / 1000).toFixed(0)} s`);
-        inputArgs = []; inputName = input; title = linkInfo.title;
+        inputArgs = []; inputName = input; title = linkInfo.title; creator = linkInfo.creator;
         long = { url: job.source.url, chatPath };
       } else {
         const src = await fetchSource(job.source, dir);
-        input = src.path; inputArgs = []; inputName = src.path; title = src.title;
+        input = src.path; inputArgs = []; inputName = src.path; title = src.title; creator = src.creator;
       }
     }
     const info = await probe(input, inputArgs);
@@ -196,7 +197,9 @@ export async function processProject(job: ProcessJob): Promise<void> {
     // moments an editor would cut. They join the heuristic windows below.
     await setStatus(projectId, "scoring", { progress: 55 });
     stage("nominate");
-    const aiNominations = await nominateMoments(words, sents, 6, chat);
+    // Who/what the source is — the engine names people in on-screen headlines.
+    const source = { title: title ?? job.title ?? undefined, creator };
+    const aiNominations = await nominateMoments(words, sents, 6, chat, source);
     // The biggest chat spikes are candidates too, unless the AI already took that moment.
     const nominations = [...aiNominations, ...chatNominations(sents, chat).filter((c) =>
       !aiNominations.some((m) => Math.max(m.s0, c.s0) <= Math.min(m.s1, c.s1)))]
@@ -218,7 +221,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
     // windows (cost control: never the whole pool).
     const heuristicPicks = selectMMR(scored, Math.min(scored.length, Math.max(n * 2, 12)), 0.2);
     const shortlist = [...nominated.slice(0, Math.max(n * 3, 20)), ...heuristicPicks];
-    const { model } = await refineWithLLM(shortlist, words);
+    const { model } = await refineWithLLM(shortlist, words, 12, source);
     // Edges are snapped BEFORE selection, so a moment that still can't make a
     // proper clip (under the minimum length) is dropped and the next-best
     // takes its place — instead of shipping a context-free one-liner.
