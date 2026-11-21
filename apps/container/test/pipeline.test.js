@@ -449,5 +449,16 @@ test("captions: power words get their own colour", () => {
   for (const w of ["$500", "10", "3x", "90%", "NEVER", "insane!", "million,"]) assert.ok(isPowerWord(w), w);
   for (const w of ["the", "and", "really", "gym"]) assert.ok(!isPowerWord(w), w);
   const ass = buildAss([{ w: "this", t0: 0, t1: 300 }, { w: "is", t0: 300, t1: 500 }, { w: "insane", t0: 500, t1: 900 }], "karaoke_yellow", 1080, 1920);
-  assert.match(ass, /\c&H0035F24A\}INSANE/);
+  assert.ok(ass.includes(`${String.fromCharCode(92)}c&H0035F24A}INSANE`), "power word coloured");
+});
+
+test("brand kit colours override the caption style", () => {
+  const { assColor, buildAss } = require("../dist/pipeline/captions");
+  assert.equal(assColor("#ffe100"), "&H0000E1FF");
+  const words = [{ w: "make", t0: 0, t1: 300 }, { w: "$500", t0: 300, t1: 700 }, { w: "today", t0: 700, t1: 1100 }];
+  const ass = buildAss(words, "karaoke_yellow", 1080, 1920, { colors: { active: "#ff0000", keyword: "#0000ff" } });
+  const BS = String.fromCharCode(92); // a literal backslash, as ASS writes it
+  assert.ok(ass.includes(`${BS}c&H000000FF${BS}fscx118`), "spoken word in brand red");
+  assert.ok(ass.includes(`${BS}c&H00FF0000}$500`), "power word in brand blue");
+  assert.doesNotMatch(buildAss(words, "classic", 1080, 1920, { colors: { active: "#ff0000" } }), /&H000000FF/); // classic has no highlight
 });

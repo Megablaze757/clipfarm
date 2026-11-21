@@ -39,6 +39,7 @@ export const api = {
   post: <T = any>(p: string, body?: unknown, headers?: Record<string, string>) =>
     apiFetch<T>(p, { method: 'POST', body: JSON.stringify(body ?? {}), headers }),
   patch: <T = any>(p: string, body: unknown) => apiFetch<T>(p, { method: 'PATCH', body: JSON.stringify(body) }),
+  put: <T = any>(p: string, body: unknown) => apiFetch<T>(p, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T = any>(p: string) => apiFetch<T>(p, { method: 'DELETE' }),
 }
 

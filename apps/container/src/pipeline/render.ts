@@ -24,6 +24,8 @@ export interface RenderSpec {
   /** Split screen: speaker on top, this footage below (absent/none = full frame). */
   background?: { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
   watermark: boolean;
+  /** Brand kit (brand.ts on the Worker): logo + colours. */
+  brand?: { logo?: string | null; logo_position?: string; colors?: { active?: string; keyword?: string; headline_bg?: string; headline_text?: string } } | null;
   audio: { loudnorm: { target_lufs: number; tp: number } };
   encode: { crf: number; preset: string; fps: number };
 }
@@ -116,6 +118,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const bgArgs: string[] = [];
   const isGame = bg?.kind === "builtin" && !!GAMES[bg.id];
   let gameSounds: { t: number; s: Sfx }[] = [];
+  const logoArgs: string[] = [];
   let sfxFile: string | null = null;
   if (bg?.kind === "builtin" && isGame) {
     // Our own gameplay: simulate, pipe the frames into a quick lossless-ish encode.
@@ -185,7 +188,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
       .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
       .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
     const assPath = join(dir, "captions.ass");
-    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg || twoUp }));
+    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg || twoUp, colors: spec.brand?.colors }));
     filters.push(`${v}subtitles=filename='${assPath}':fontsdir='${FONTS_DIR}'[v${n}]`);
     v = `[v${n++}]`;
   }
@@ -196,12 +199,31 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     const [a, b] = o.t_ms;
     const fs = Math.round(w * 0.06), pad = Math.round(fs * 0.3), lineH = fs + pad * 2 + Math.round(fs * 0.12);
     const lines = wrapHeadline(o.text.toUpperCase(), 20).slice(0, 3);
+    const ffc = (c: string | undefined, d: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? `0x${c.slice(1)}` : d);
+    const headBg = ffc(spec.brand?.colors?.headline_bg, "white"), headText = ffc(spec.brand?.colors?.headline_text, "black");
     const y0 = Math.round(h * (bg || twoUp ? 0.035 : 0.1));
     const when = `enable='between(t,${(a / 1000).toFixed(2)},${(b / 1000).toFixed(2)})'`;
     lines.forEach((line, k) => {
-      filters.push(`${v}drawtext=fontfile='${FONT}':text='${dt(line)}':fontsize=${fs}:fontcolor=black:box=1:boxcolor=white:boxborderw=${pad}:x=(w-text_w)/2:y=${y0 + k * lineH + pad}:${when}[v${n}]`);
+      filters.push(`${v}drawtext=fontfile='${FONT}':text='${dt(line)}':fontsize=${fs}:fontcolor=${headText}:box=1:boxcolor=${headBg}:boxborderw=${pad}:x=(w-text_w)/2:y=${y0 + k * lineH + pad}:${when}[v${n}]`);
       v = `[v${n++}]`;
     });
+  }
+  // Brand logo in a corner (~14 % of the width).
+  if (spec.brand?.logo) {
+    const m = spec.brand.logo.match(/^data:image\/(png|jpeg|webp);base64,(.+)$/);
+    if (m) {
+      const logoPath = join(dir, `brand-logo.${m[1] === "jpeg" ? "jpg" : m[1]}`);
+      await writeFile(logoPath, Buffer.from(m[2], "base64"));
+      logoArgs.push("-loop", "1", "-i", logoPath);
+      const idx = 1 + bgArgs.filter((a) => a === "-i").length;
+      const lw = Math.round(w * 0.14), mg = Math.round(w * 0.04);
+      const pos = spec.brand.logo_position ?? "top-right";
+      const x = pos.endsWith("left") ? String(mg) : `W-w-${mg}`;
+      const y = pos.startsWith("bottom") ? `H-h-${Math.round(h * 0.2)}` : String(Math.round(h * 0.03));
+      filters.push(`[${idx}:v]scale=${lw}:-1,format=rgba,colorchannelmixer=aa=0.92[logo]`);
+      filters.push(`${v}[logo]overlay=${x}:${y}:shortest=1[v${n}]`);
+      v = `[v${n++}]`;
+    }
   }
   if (spec.watermark) {
     // FR-11.6 — applied whenever the Worker says so; the client can't turn it off.
@@ -229,7 +251,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
 
   const videoOnly = join(dir, "video-only.mp4");
   const [af] = await Promise.all([measure, ffmpeg([
-    "-ss", ss, ...inputArgs, "-i", mezzanine, ...bgArgs, "-t", durS.toFixed(3),
+    "-ss", ss, ...inputArgs, "-i", mezzanine, ...bgArgs, ...logoArgs, "-t", durS.toFixed(3),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]", "-an",
     "-c:v", "libx264", "-crf", String(spec.encode.crf), "-preset", spec.encode.preset, "-profile:v", "high",

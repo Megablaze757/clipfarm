@@ -8,7 +8,7 @@ import { analyzeLoudness, browserPlayable, energyEnvelope, extractAudio, makeMez
 import { localChunksUsed, pool, transcribe } from "./pipeline/asr";
 import { sentences } from "./pipeline/text";
 import { generateWindows, targetCount } from "./pipeline/candidates";
-import { heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
+import { finalScore, heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
 import { chatNominations, nominateMoments } from "./pipeline/moments";
 import { chatSpikes, type ChatSignal } from "./pipeline/chat";
 import { alignSection, buildZoneAudio, downloadAudioOnly, downloadHlsSection, downloadSection, hlsPlaylist, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
@@ -34,6 +34,8 @@ export interface ProcessJob {
   source: { kind: "upload"; r2_key: string } | { kind: "url"; url: string };
   options: { language?: string; clip_durations?: number[] | "auto"; max_clips?: number | null; chat_key?: string };
   title?: string | null;
+  /** category → score multiplier, learned from this workspace's results. */
+  tastes?: Record<string, number>;
   plan: { id: string; clipsPerSource: number | null; maxSourceMinutes: number; remainingMinutes: number };
 }
 
@@ -224,6 +226,15 @@ export async function processProject(job: ProcessJob): Promise<void> {
     const heuristicPicks = selectMMR(scored, Math.min(scored.length, Math.max(n * 2, 12)), 0.2);
     const shortlist = [...nominated.slice(0, Math.max(n * 3, 20)), ...heuristicPicks];
     const { model } = await refineWithLLM(shortlist, words, 12, source);
+    // Learned from this workspace's own "did well" / "flopped" marks.
+    const tastes = job.tastes ?? {};
+    if (Object.keys(tastes).length) {
+      for (const c of shortlist) {
+        const t = tastes[c.features.category ?? ""];
+        if (t) { c.features.taste = t; c.score = finalScore(c); if (t > 1) c.features.signals.push("your audience likes these"); }
+      }
+      stage(`tastes applied: ${JSON.stringify(tastes)}`);
+    }
     // Edges are snapped BEFORE selection, so a moment that still can't make a
     // proper clip (under the minimum length) is dropped and the next-best
     // takes its place — instead of shipping a context-free one-liner.

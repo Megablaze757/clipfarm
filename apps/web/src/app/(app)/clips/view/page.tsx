@@ -97,6 +97,13 @@ function Studio() {
   const [preset, setPreset] = useState('tiktok')
   const [bgList, setBgList] = useState<BackgroundList | null>(null)
   const [bgUploading, setBgUploading] = useState<string | null>(null)
+  const [verdict, setVerdict] = useState<'good' | 'flopped' | null>(null)
+  const [brandColors, setBrandColors] = useState<{ active?: string; keyword?: string; headline_bg?: string; headline_text?: string }>({})
+  useEffect(() => { api.get<{ brand: { colors?: typeof brandColors } | null }>('/v1/brandkit').then((r) => setBrandColors(r.brand?.colors ?? {})).catch(() => {}) }, [])
+  async function markResult(signal: 'good' | 'flopped') {
+    setVerdict(signal)
+    api.post(`/v1/clips/${id}/feedback`, { signal }).catch(() => {})
+  }
   const loadBackgrounds = useCallback(() => api.get<BackgroundList>('/v1/backgrounds').then(setBgList).catch(() => {}), [])
   useEffect(() => { loadBackgrounds() }, [loadBackgrounds])
   const uploadBackground = async (file: File) => {
@@ -335,7 +342,7 @@ function Studio() {
                 // The context headline — same look as the export: black on white boxes, whole clip.
                 <div className={`absolute inset-x-3 flex flex-col items-center gap-[3px] pointer-events-none ${split ? 'top-[3.5%]' : 'top-[10%]'}`}>
                   {wrapHeadline(state.overlay.toUpperCase(), 20).slice(0, 3).map((line, k) => (
-                    <span key={k} className="bg-white text-black text-[14px] leading-tight px-1.5 py-0.5" style={{ fontFamily: 'Montserrat, "Arial Black", sans-serif', fontWeight: 800 }}>{line}</span>
+                    <span key={k} className="text-[14px] leading-tight px-1.5 py-0.5" style={{ background: brandColors.headline_bg || '#fff', color: brandColors.headline_text || '#000', fontFamily: 'Montserrat, "Arial Black", sans-serif', fontWeight: 800 }}>{line}</span>
                   ))}
                 </div>
               )}
@@ -348,7 +355,7 @@ function Studio() {
                       textShadow: state.style !== 'neon_box' ? '0 0 3px #000, 0 0 3px #000, 0 2px 4px #000' : undefined,
                     }}>
                     {captionLine.words.map((w) => (
-                      <span key={w.i} style={{ color: w.i === captionLine.active && state.style !== 'classic' ? lookFor(state.style).active : lookFor(state.style).keyword && isPowerWord(fixed(w)) ? lookFor(state.style).keyword! : '#fff' }}>
+                      <span key={w.i} style={{ color: w.i === captionLine.active && state.style !== 'classic' ? (brandColors.active || lookFor(state.style).active) : lookFor(state.style).keyword && isPowerWord(fixed(w)) ? (brandColors.keyword || lookFor(state.style).keyword!) : '#fff' }}>
                         {state.style === 'karaoke_yellow' || state.style === 'bold_pop' ? fixed(w).toUpperCase() : fixed(w)}{' '}
                       </span>
                     ))}
@@ -541,6 +548,18 @@ function Studio() {
                 </li>
               ))}
             </ul>
+            {renders.some((r) => r.status === 'completed' || r.status === 'expired') && (
+              // Learn from results: marks feed the ranking of this workspace's next projects.
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-400">Posted it? How did it do?</span>
+                {verdict ? <span className="text-emerald-300">Thanks — Clipper will {verdict === 'good' ? 'find more moments like this' : 'rank moments like this lower'}.</span> : (
+                  <>
+                    <button onClick={() => markResult('good')} className="px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10">👍 Did well</button>
+                    <button onClick={() => markResult('flopped')} className="px-3 py-1.5 rounded-lg border border-rose-500/40 text-rose-200 hover:bg-rose-500/10">👎 Flopped</button>
+                  </>
+                )}
+              </div>
+            )}
           </section>
         </div>
       </div>

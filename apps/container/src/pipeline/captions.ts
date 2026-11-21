@@ -82,8 +82,19 @@ const ts = (ms: number) => {
 const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/\{/g, "(").replace(/\}/g, ")").replace(/\n/g, " ");
 
 /** Builds the .ass file. `words` times are relative to the clip start. */
-export function buildAss(words: CapWord[], styleId: string, w: number, h: number, opts: { middle?: boolean } = {}): string {
-  const st = STYLES[styleId] ?? STYLES.karaoke_yellow;
+/** "#ffe100" → ASS "&H0000E1FF" (&HAABBGGRR). */
+export const assColor = (hex: string) => `&H00${hex.slice(5, 7)}${hex.slice(3, 5)}${hex.slice(1, 3)}`.toUpperCase();
+
+export function buildAss(words: CapWord[], styleId: string, w: number, h: number,
+  opts: { middle?: boolean; colors?: { active?: string; keyword?: string } } = {}): string {
+  const base = STYLES[styleId] ?? STYLES.karaoke_yellow;
+  // Brand-kit colours replace the style's own (classic has no highlight to recolour).
+  const hex = (c?: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? assColor(c) : null);
+  const st: Style = {
+    ...base,
+    highlight: base.highlight && hex(opts.colors?.active) ? hex(opts.colors?.active) : base.highlight,
+    keyword: base.keyword && hex(opts.colors?.keyword) ? hex(opts.colors?.keyword)! : base.keyword,
+  };
   const size = Math.round(Math.min(w, h * 0.5625) * st.size * 1.4);
   const outline = Math.max(2, Math.round(w * st.outlineW));
   // Normally above TikTok/Reels bottom UI (FR-8.6 safe area); in split screen,

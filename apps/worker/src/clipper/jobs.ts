@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { dbCount, dbJson, dbOne, dbPatch, rpc } from "./db";
 import { dispatchToContainer } from "./container";
 import { planFor, planForTenant, PRESETS } from "./plans";
+import { loadBrand, tastes } from "./brand";
 
 export const IN_FLIGHT = ["transcoding", "transcribing", "analyzing", "candidates", "scoring"];
 
@@ -56,6 +57,8 @@ export async function processPayload(env: Env, project: ProjectRow) {
     source: project.source_kind === "upload" ? { kind: "upload", r2_key: project.source_uri } : { kind: "url", url: project.source_uri },
     options: project.options ?? {},
     title: (project as { title?: string }).title ?? null,
+    // What this workspace's own results say about each kind of moment (brand.ts).
+    tastes: await tastes(env, project.tenant_id).catch(() => ({})),
     plan: {
       id: plan.id,
       clipsPerSource: plan.clipsPerSource,
@@ -174,6 +177,8 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     // The headline stays up for the whole clip — it's the context, not an intro card.
     overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, clip.t_out_ms - clip.t_in_ms] }] : [],
     watermark: planFor(tenant?.plan).watermark, // FR-11.6 — decided here, never by the client
+    // Brand kit: logo in a corner, caption + headline colours (brand.ts).
+    brand: await loadBrand(env, clip.tenant_id).then((b) => (b ? { logo: b.logo ?? null, logo_position: b.logo_position, colors: b.colors ?? {} } : null)).catch(() => null),
     audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },
     encode: { vcodec: "h264", crf: 21, preset: "veryfast", fps: preset.fps, faststart: true }, // veryfast: ~3x faster than medium; CRF 21 keeps quality well above what TikTok/Reels re-encode to
   };

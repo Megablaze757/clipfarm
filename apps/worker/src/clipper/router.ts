@@ -10,6 +10,7 @@ import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN
 import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import * as admin from "./admin";
+import { getBrand, loadBrand, putBrand } from "./brand";
 import { passwordChanged, recover, resend, signup } from "./accounts";
 import { modelChain } from "../pocketathlete/index";
 
@@ -80,6 +81,8 @@ const ROUTES: [string, RegExp, Handler][] = [
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],
   ["POST", /^\/v1\/brandkits$/, authed(createBrandkit)],
+  ["GET", /^\/v1\/brandkit$/, authed(async (_r, env, c) => getBrand(env, c))],
+  ["PUT", /^\/v1\/brandkit$/, authed(async (r, env, c) => putBrand(r, env, c))],
   ["GET", /^\/v1\/usage$/, authed(getUsage)],
   ["GET", /^\/v1\/me$/, authed(async (_r, _env, c) => json({ user_id: c.userId, email: c.email, tenant_id: c.tenantId, role: c.role, plan: c.plan, is_admin: c.admin, guest: c.guest }))],
   ["POST", /^\/v1\/billing\/checkout$/, authed(async (r, env, c) => checkout(r, env, c))],
@@ -329,7 +332,8 @@ async function createClip(req: Request, env: Env, caller: Caller): Promise<Respo
     title: cand.features?.title ?? cand.rationale ?? null,
     t_in_ms: cand.t_in_ms, t_out_ms: cand.t_out_ms,
     edits: {
-      captions: { enabled: true, style: "karaoke_yellow", edits: [] },
+      // The workspace's brand-kit caption style, if it has one.
+      captions: { enabled: true, style: (await loadBrand(env, caller.tenantId).catch(() => null))?.caption_style ?? "karaoke_yellow", edits: [] },
       // Framed on the speaker's face by the runner (facetrack.ts), if it found one.
       layout: autoLayout(cand.features?.auto_reframe),
       // The engine's context headline ("KAI CENAT CRASHES OUT AT …"), editable in the editor.
@@ -387,7 +391,7 @@ async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): P
 async function clipFeedback(req: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
   const clip = await ownClip(env, caller, p[0]);
   const { signal, payload } = await body<{ signal?: string; payload?: unknown }>(req);
-  if (!["not_good", "exported", "published", "edited_heavy", "good"].includes(String(signal))) throw new ApiError(400, "E_VALIDATION", "unknown signal");
+  if (!["not_good", "exported", "published", "edited_heavy", "good", "flopped"].includes(String(signal))) throw new ApiError(400, "E_VALIDATION", "unknown signal");
   // Feedback rows need a real user (they train the scorer per person); guests are skipped.
   if (caller.guest) return json({ recorded: false, reason: "guest" });
   await dbInsert(env, "feedback", { clip_id: clip.id, user_id: caller.userId, signal, payload: payload ?? null });

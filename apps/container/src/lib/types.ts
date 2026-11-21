@@ -75,6 +75,8 @@ export interface Candidate {
     chat?: { z: number; ratio: number; kind: string; sample: string[] };
     /** Multiplier from a chat spike (1 = none, up to 1.3). */
     chat_boost?: number;
+    /** Multiplier from this workspace's own results for this category (0.8-1.2). */
+    taste?: number;
   };
   rationale: string;
 }

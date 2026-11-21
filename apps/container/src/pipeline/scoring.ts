@@ -197,7 +197,7 @@ export function heuristicScore(words: Word[], env: Envelope, w: Window, globalRa
 
 /** The ranking score: composite × AI-review factor × chat boost. */
 export function finalScore(c: Candidate): number {
-  return Math.round(composite(c.subscores) * (c.features.score_factor ?? 1) * (c.features.chat_boost ?? 1) * 100) / 100;
+  return Math.round(composite(c.subscores) * (c.features.score_factor ?? 1) * (c.features.chat_boost ?? 1) * (c.features.taste ?? 1) * 100) / 100;
 }
 
 export function composite(s: Subscores): number {
