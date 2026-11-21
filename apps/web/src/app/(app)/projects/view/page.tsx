@@ -7,6 +7,7 @@ import { ErrorBox, Loading, isGuest, usePolling, useRequireSession, useSignInOn4
 import { api, type CandidateRow, type Project } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
 import { CATEGORY_LABELS, formatDuration, SUBSCORE_LABELS } from '@/lib/tokens'
+import { ExportAll } from '@/components/export-all'
 
 function ProjectView() {
   const session = useRequireSession()
@@ -93,6 +94,7 @@ function ProjectView() {
       {project.status === 'ready' && (
         <section className="space-y-4">
           <h2 className="text-xl font-bold text-white">Shortlist, best first</h2>
+          {visible.length > 0 && <ExportAll candidates={visible} projectTitle={project.title} />}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {visible.map((c) => (
               <article key={c.id} className="glass-panel rounded-2xl p-4 border border-slate-800/80 flex flex-col gap-4">
