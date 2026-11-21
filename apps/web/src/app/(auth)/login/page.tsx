@@ -45,7 +45,7 @@ function LoginForm() {
   const [awaitingConfirm, setAwaitingConfirm] = useState(false)
   const [cooldown, setCooldown] = useState(0)
 
-  useEffect(() => { if (params.get('mode') === 'sign_up') setMode('sign_up') }, [params])
+  useEffect(() => { const m = params.get('mode'); if (m === 'sign_up' || m === 'forgot') setMode(m) }, [params])
   useEffect(() => { if (session) router.replace(next) }, [session, next, router])
   useEffect(() => {
     if (cooldown <= 0) return

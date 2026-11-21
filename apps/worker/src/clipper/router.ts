@@ -10,7 +10,7 @@ import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN
 import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import * as admin from "./admin";
-import { recover, resend, signup } from "./accounts";
+import { passwordChanged, recover, resend, signup } from "./accounts";
 import { modelChain } from "../pocketathlete/index";
 
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[]) => Promise<Response>;
@@ -64,6 +64,7 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["POST", /^\/v1\/auth\/signup$/, async (r, env) => signup(r, env)],
   ["POST", /^\/v1\/auth\/recover$/, async (r, env) => recover(r, env)],
   ["POST", /^\/v1\/auth\/resend$/, async (r, env) => resend(r, env)],
+  ["POST", /^\/v1\/auth\/password-changed$/, authed(async (_r, env, c) => passwordChanged(env, c))],
 
   // Admin panel (admin.ts) — every route checks the admin role on the Worker
   ["GET", /^\/v1\/admin\/overview$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.overview(env); })],

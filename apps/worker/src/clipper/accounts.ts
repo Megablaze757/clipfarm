@@ -1,5 +1,7 @@
 import { appUrl, type Env } from "./env";
 import { ApiError, body, json } from "./http";
+import { renderEmail, type TemplateName } from "./email-templates";
+import type { Caller } from "./auth";
 
 /**
  * Clipper's own account emails.
@@ -42,19 +44,6 @@ async function throttled(env: Env, kind: string, email: string): Promise<boolean
   return false;
 }
 
-function page(title: string, intro: string, button: string, link: string, outro: string): { html: string; text: string } {
-  const html = `<!doctype html><html><body style="margin:0;background:#0b1020;font-family:Inter,Segoe UI,Arial,sans-serif">
-<div style="max-width:480px;margin:0 auto;padding:40px 24px;color:#e2e8f0">
-  <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:24px">✂️ Clipper</div>
-  <h1 style="font-size:20px;color:#fff;margin:0 0 12px">${title}</h1>
-  <p style="font-size:14px;line-height:1.6;color:#cbd5e1;margin:0 0 24px">${intro}</p>
-  <a href="${link}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 22px;border-radius:12px">${button}</a>
-  <p style="font-size:12px;line-height:1.6;color:#94a3b8;margin:24px 0 0">${outro}</p>
-  <p style="font-size:11px;color:#64748b;margin:16px 0 0;word-break:break-all">Or paste this link into your browser:<br>${link}</p>
-</div></body></html>`;
-  return { html, text: `${title}\n\n${intro}\n\n${button}: ${link}\n\n${outro}` };
-}
-
 /**
  * CLIPPER'S OWN SENDER. Same delivery channels as PocketAthlete (its Gmail
  * Apps Script or Resend — the Worker's existing secrets), but every email goes
@@ -73,6 +62,12 @@ export function clipperFrom(env: Env): string {
   const shared = v(env, "REMINDER_FROM");
   const address = (shared.match(/<([^>]+)>/)?.[1] ?? shared).trim();
   return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address) ? `Clipper <${address}>` : "Clipper";
+}
+
+/** Renders a template from email-templates/ and sends it as Clipper. */
+async function sendTemplate(env: Env, name: TemplateName, to: string, vars: { link?: string; when?: string } = {}): Promise<void> {
+  const mail = renderEmail(name, { ...vars, email: to, app_url: appUrl(env) });
+  await deliver(env, to, mail.subject, mail);
 }
 
 async function deliver(env: Env, to: string, subject: string, mail: { html: string; text: string }): Promise<void> {
@@ -119,9 +114,7 @@ export async function signup(req: Request, env: Env): Promise<Response> {
     throw new ApiError(502, "E_AUTH", link.error ?? "couldn't create the account");
   }
   const url = `${appUrl(env)}/login?token_hash=${encodeURIComponent(link.hashed_token)}&type=signup`;
-  await deliver(env, email.trim(), "Confirm your Clipper account", page(
-    "Confirm your email", "Tap the button to confirm your email and finish creating your Clipper account.",
-    "Confirm email", url, "If you didn't sign up for Clipper, ignore this email — no account will be activated."));
+  await sendTemplate(env, "confirm-signup", email.trim(), { link: url });
   return json({ sent: true });
 }
 
@@ -133,9 +126,7 @@ export async function recover(req: Request, env: Env): Promise<Response> {
   const link = await generateLink(env, "recovery", email.trim());
   if (link.hashed_token) {
     const url = `${appUrl(env)}/reset-password?token_hash=${encodeURIComponent(link.hashed_token)}&type=recovery`;
-    await deliver(env, email.trim(), "Reset your Clipper password", page(
-      "Reset your password", "Tap the button to choose a new password for your Clipper account. The link works once and expires in an hour.",
-      "Choose a new password", url, "If you didn't ask for this, ignore this email — your password stays the same."));
+    await sendTemplate(env, "reset-password", email.trim(), { link: url });
   }
   return json({ sent: true });
 }
@@ -148,9 +139,20 @@ export async function resend(req: Request, env: Env): Promise<Response> {
   const link = await generateLink(env, "magiclink", email.trim());
   if (link.hashed_token) {
     const url = `${appUrl(env)}/login?token_hash=${encodeURIComponent(link.hashed_token)}&type=magiclink`;
-    await deliver(env, email.trim(), "Your Clipper sign-in link", page(
-      "Confirm and sign in", "Tap the button to confirm your email and sign in to Clipper.",
-      "Sign in to Clipper", url, "If you didn't ask for this, ignore this email."));
+    await sendTemplate(env, "sign-in-link", email.trim(), { link: url });
   }
+  return json({ sent: true });
+}
+
+/**
+ * POST /v1/auth/password-changed — the signed-in user's security notice after
+ * they change their password. Only ever sent to the caller's OWN confirmed
+ * address, at most once a minute.
+ */
+export async function passwordChanged(env: Env, caller: Caller): Promise<Response> {
+  if (caller.guest || !caller.email) throw new ApiError(401, "E_UNAUTHORIZED", "sign in first");
+  if (await throttled(env, "pwchanged", caller.email)) return json({ sent: false });
+  const when = new Date().toUTCString().replace(" GMT", " UTC");
+  await sendTemplate(env, "password-changed", caller.email, { link: `${appUrl(env)}/login?mode=forgot`, when });
   return json({ sent: true });
 }

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4fb;">
+<!--
+  CLIPPER — shared layout for every account email. Each email's own file
+  (confirm-signup.html, reset-password.html, …) is dropped into {{{ content }}}.
+  Table layout + inline styles: what renders the same in Gmail, Outlook and
+  Apple Mail. Placeholders: {{ name }} is HTML-escaped, {{{ name }}} is not.
+-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4fb;margin:0;padding:24px 12px;">
+  <tr>
+    <td align="center">
+
+      <!-- Preview text: shown in the inbox list, hidden in the body. -->
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ preheader }}</div>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border:1px solid #e4e4f0;border-radius:16px;">
+        <tr>
+          <td style="padding:28px 32px 0 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="width:34px;height:34px;border-radius:10px;background:#6366f1;text-align:center;vertical-align:middle;font-size:17px;line-height:34px;color:#ffffff;">&#9986;</td>
+                <td style="padding-left:10px;font-size:18px;font-weight:800;letter-spacing:-0.2px;color:#12121a;">Clipper</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+{{{ content }}}
+      </table>
+
+      <div style="max-width:560px;padding:14px 8px 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#8a8ca3;text-align:center;">
+        Clipper · long videos into viral clips · <a href="{{ app_url }}" style="color:#8a8ca3;">Open Clipper</a><br>
+        Sent to {{ email }}
+      </div>
+
+    </td>
+  </tr>
+</table>
+</body>
+</html>

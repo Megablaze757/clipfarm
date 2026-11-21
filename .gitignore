@@ -10,3 +10,4 @@ apps/web/out
 apex-api-merged.worker.js
 __pycache__/
 *.pyc
+.email-preview/

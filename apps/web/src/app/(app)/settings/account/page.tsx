@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useSession, Loading } from '@/components/use-session'
 import { useMe } from '@/components/use-me'
+import { api } from '@/lib/api'
 
 /** Your account: email, plan, change password, sign out. */
 export default function AccountPage() {
@@ -31,6 +32,7 @@ export default function AccountPage() {
     setBusy(false)
     if (error) { setError(/reauth|recent/i.test(error.message) ? 'For security, sign out and back in, then change it straight away.' : error.message); return }
     setPassword(''); setConfirm(''); setSaved(true)
+    api.post('/v1/auth/password-changed', {}).catch(() => {}) // Clipper's security email
   }
 
   return (

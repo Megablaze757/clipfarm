@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { api } from '@/lib/api'
 
 /**
  * Choose a new password. The link from the reset email arrives as
@@ -56,6 +57,7 @@ export default function ResetPasswordPage() {
     setBusy(false)
     if (error) { setError(error.message); return }
     setDone(true)
+    api.post('/v1/auth/password-changed', {}).catch(() => {}) // Clipper's security email
     setTimeout(() => router.replace('/projects'), 1500)
   }
 
