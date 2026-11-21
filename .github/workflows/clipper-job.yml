@@ -38,7 +38,9 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    # GitHub's runner by default; the operator's own PC (a self-hosted runner)
+    # when the Worker says so — Admin → Settings → "Run jobs on my computer".
+    runs-on: ${{ github.event.client_payload.runs_on || vars.CLIPPER_RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 330
     env:
       CLIPPER_API_URL: ${{ vars.CLIPPER_API_URL || 'https://apex-api.fitnessguru.workers.dev' }}
@@ -82,7 +84,7 @@ jobs:
           echo "$HOME/clipper-tools" >> "$GITHUB_PATH"
           "$HOME/clipper-tools/ffmpeg" -hide_banner -version | head -1
           # Caption font: usually preinstalled; install only if missing.
-          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || { sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core > /dev/null; }
+          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || { sudo -n apt-get update -qq && sudo -n apt-get install -y -qq fonts-dejavu-core > /dev/null; } || echo "::notice::DejaVu font not installed (Clipper ships its own caption fonts)"
 
       - uses: actions/setup-node@v4
         with:
@@ -142,7 +144,8 @@ jobs:
         if: env.JOB_KIND == 'process'
         run: |
           best="$RUNNER_TEMP"; bestfree=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2{print $4}')
-          if [ -d /mnt ] && sudo mkdir -p /mnt/clipper && sudo chown "$USER" /mnt/clipper; then
+          # sudo -n: never prompt for a password (a home PC may not allow sudo).
+          if [ -d /mnt ] && sudo -n mkdir -p /mnt/clipper 2>/dev/null && sudo -n chown "$USER" /mnt/clipper 2>/dev/null; then
             mntfree=$(df -Pk /mnt | awk 'NR==2{print $4}')
             [ "$mntfree" -gt "$bestfree" ] && best=/mnt && bestfree=$mntfree
           fi

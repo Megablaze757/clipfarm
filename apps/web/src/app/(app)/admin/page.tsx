@@ -18,6 +18,7 @@ const TABS = [
   { id: 'payments', label: 'Payments' },
   { id: 'jobs', label: 'Jobs' },
   { id: 'settings', label: 'Settings' },
+  { id: 'system', label: 'System' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
 const PLAN_IDS = ['free', 'creator', 'team', 'agency', 'enterprise']
@@ -45,6 +46,18 @@ function useLoad<T>(path: string) {
   const load = useCallback(() => { setError(null); api.get<T>(path).then(setData).catch((e) => setError((e as Error).message)) }, [path])
   useEffect(() => { load() }, [load])
   return { data, error, load }
+}
+
+/** Reminder until launch: guest mode lets anyone use Clipper free. */
+function GuestBanner({ onFix }: { onFix: () => void }) {
+  const { data } = useLoad<{ guest_mode: boolean }>('/v1/admin/settings')
+  if (!data?.guest_mode) return null
+  return (
+    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-3">
+      <span><strong>Guest mode is on</strong> — anyone can use Clipper free, without an account or plan limits. Turn it off before you launch.</span>
+      <button onClick={onFix} className="underline font-semibold">Settings</button>
+    </div>
+  )
 }
 
 function Overview() {
@@ -229,7 +242,7 @@ function Jobs() {
 }
 
 function Settings() {
-  const { data, error, load } = useLoad<{ guest_mode: boolean; guest_mode_forced_off: boolean }>('/v1/admin/settings')
+  const { data, error, load } = useLoad<{ guest_mode: boolean; guest_mode_forced_off: boolean; home_runner: string }>('/v1/admin/settings')
   const [busy, setBusy] = useState(false)
   async function toggle(on: boolean) {
     if (!on && !confirm('Turn guest mode off? Everyone will need an account to use Clipper.')) return
@@ -251,7 +264,61 @@ function Settings() {
         </button>
       </div>
       {data.guest_mode_forced_off && <p className="text-[11px] text-slate-500">Forced off by CLIPPER_GUEST_MODE on the Worker.</p>}
+      <div className="border-t border-slate-800 pt-4 space-y-2">
+        <h3 className="text-sm font-bold text-white">Run jobs on my computer</h3>
+        <p className="text-xs text-slate-400">YouTube blocks GitHub's servers but not home connections. Register your PC as a GitHub self-hosted runner (guide: docs/home-runner.md in the repo), then choose what goes to it. Jobs sent to it wait until your computer is on.</p>
+        <select value={data.home_runner} disabled={busy} onChange={async (e) => { setBusy(true); try { await api.patch('/v1/admin/settings', { home_runner: e.target.value }); load() } finally { setBusy(false) } }}
+          className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+          <option value="off">Off — GitHub's runners only</option>
+          <option value="youtube">YouTube links only</option>
+          <option value="all">All jobs</option>
+        </select>
+        <a href="https://github.com/Megablaze757/clipfarm/blob/main/docs/home-runner.md" target="_blank" rel="noreferrer" className="block text-[11px] text-indigo-300 underline">How to set up the runner</a>
+      </div>
     </section>
+  )
+}
+
+function System() {
+  const { data, error, load } = useLoad<any>('/v1/admin/system')
+  if (error) return <ErrorBox message={error} onRetry={load} />
+  if (!data) return <Loading label="Testing keys…" />
+  const Row = ({ ok, title, detail, fix }: { ok: boolean | null; title: string; detail: string; fix?: string }) => (
+    <div className="flex items-start gap-3 py-3 border-b border-slate-800/80 last:border-0">
+      <span className={`mt-0.5 text-sm ${ok ? 'text-emerald-300' : ok === null ? 'text-slate-500' : 'text-rose-300'}`}>{ok ? '●' : ok === null ? '○' : '●'}</span>
+      <div className="min-w-0">
+        <div className="text-sm text-white font-semibold">{title}</div>
+        <div className="text-xs text-slate-400">{detail}</div>
+        {!ok && fix && <div className="text-[11px] text-amber-200 mt-1">{fix}</div>}
+      </div>
+    </div>
+  )
+  const ai = (k: string, name: string) => {
+    const x = data.ai[k]
+    return <Row key={k} ok={x.works} title={name} detail={`${x.role} — ${!x.set ? 'no key set' : x.works ? 'key works' : `key REJECTED (${x.status ?? 'no response'})`}`} fix={x.fix} />
+  }
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <section className="glass-panel rounded-2xl p-5 border border-slate-800">
+        <h3 className="text-sm font-bold text-white mb-1">AI keys (tested just now)</h3>
+        <p className="text-xs text-slate-400 mb-2">Transcription is using: <span className="text-slate-200">{data.transcription}</span></p>
+        {ai('groq', 'Groq')}{ai('openrouter', 'OpenRouter')}{ai('nvidia', 'NVIDIA')}
+      </section>
+      <section className="glass-panel rounded-2xl p-5 border border-slate-800">
+        <h3 className="text-sm font-bold text-white mb-1">Everything else</h3>
+        <Row ok={!!data.email.provider} title="Email" detail={data.email.provider ? `Sending with ${data.email.provider}${data.email.from ? ` as ${data.email.from}` : ' as "Clipper"'}` : 'No email provider'} fix="Set GAS_EMAIL_URL + GAS_EMAIL_SECRET, or RESEND_API_KEY, on the Worker." />
+        <Row ok={data.payments.stripe_key} title="Stripe" detail={data.payments.stripe_key ? 'Key present — set up prices in Payments' : 'No Stripe key'} fix="Set STRIPE_SECRET_KEY on the Worker." />
+        <Row ok={data.admins > 0} title="Admins" detail={`${data.admins} admin email(s) configured`} />
+        {(['youtube', 'tiktok', 'instagram'] as const).map((p) => (
+          <Row key={p} ok={data.posting[p] ? true : null} title={`Posting: ${p === 'youtube' ? 'YouTube Shorts' : p === 'tiktok' ? 'TikTok' : 'Instagram Reels'}`}
+            detail={data.posting[p] ? 'App keys set — users can connect' : 'Not set up (optional)'}
+            fix={p === 'youtube' ? `Google Cloud → OAuth client (Web), enable YouTube Data API v3, redirect URI ${data.posting.redirect_uri_pattern.replace('<youtube|tiktok|instagram>', 'youtube')}; set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.`
+              : p === 'tiktok' ? `developers.tiktok.com → app with Login Kit + Content Posting API (video.upload), redirect URI ${data.posting.redirect_uri_pattern.replace('<youtube|tiktok|instagram>', 'tiktok')}; set TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET.`
+              : `developers.facebook.com → app with Instagram Graph API + Facebook Login, redirect URI ${data.posting.redirect_uri_pattern.replace('<youtube|tiktok|instagram>', 'instagram')}; set META_APP_ID / META_APP_SECRET.`} />
+        ))}
+      </section>
+      <button onClick={load} className="text-xs underline text-slate-400">Test again</button>
+    </div>
   )
 }
 
@@ -295,11 +362,13 @@ export default function AdminPage() {
           ))}
         </nav>
       </div>
+      <GuestBanner onFix={() => choose('settings')} />
       {tab === 'overview' && <Overview />}
       {tab === 'people' && <People />}
       {tab === 'payments' && <Payments />}
       {tab === 'jobs' && <Jobs />}
       {tab === 'settings' && <Settings />}
+      {tab === 'system' && <System />}
     </div>
   )
 }

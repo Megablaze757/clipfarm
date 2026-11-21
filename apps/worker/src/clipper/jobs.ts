@@ -3,6 +3,7 @@ import { dbCount, dbJson, dbOne, dbPatch, rpc } from "./db";
 import { dispatchToContainer } from "./container";
 import { planFor, planForTenant, PRESETS } from "./plans";
 import { loadBrand, tastes } from "./brand";
+import { getSettings } from "./settings";
 
 export const IN_FLIGHT = ["transcoding", "transcribing", "analyzing", "candidates", "scoring"];
 
@@ -83,6 +84,17 @@ const githubRepo = (env: Env) => (env.CLIPPER_GITHUB_REPO || "Megablaze757/clipf
  * Worker itself, proving who it is with a GitHub OIDC token — so nothing
  * sensitive ever goes in the (publicly visible) event payload.
  */
+/** Which runner a job goes to — GitHub's, or the operator's own PC (settings.home_runner). */
+async function homeRunner(env: Env, kind: "process" | "render", payload: unknown): Promise<{ runs_on?: string }> {
+  const mode = (await getSettings(env).catch(() => ({} as { home_runner?: string }))).home_runner ?? "off";
+  if (mode === "all") return { runs_on: "self-hosted" };
+  if (mode === "youtube" && kind === "process") {
+    const url = (payload as { source?: { url?: string } })?.source?.url ?? "";
+    if (/^https?:\/\/([a-z0-9-]+\.)?(youtube\.com|youtu\.be)\//i.test(url)) return { runs_on: "self-hosted" };
+  }
+  return {};
+}
+
 export async function runJob(env: Env, kind: "process" | "render", id: string, payload: unknown): Promise<void> {
   const mode = runnerMode(env);
   if (mode === "container") {
@@ -99,7 +111,7 @@ export async function runJob(env: Env, kind: "process" | "render", id: string, p
       "User-Agent": "apex-api-clipper",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ event_type: `clipper-${kind}`, client_payload: { id } }),
+    body: JSON.stringify({ event_type: `clipper-${kind}`, client_payload: { id, ...(await homeRunner(env, kind, payload)) } }),
   });
   if (r.status !== 204) {
     throw new Error(`GitHub refused the dispatch (${r.status}) — the token needs Contents: read & write on ${githubRepo(env)}: ${(await r.text()).slice(0, 200)}`);

@@ -11,6 +11,12 @@ import type { Env } from "./env";
  */
 export interface Settings {
   guest_mode?: boolean;
+  /**
+   * Run jobs on the operator's own computer (a GitHub self-hosted runner):
+   * "off" (default), "youtube" (only YouTube links — YouTube blocks GitHub's
+   * servers, not home connections), or "all".
+   */
+  home_runner?: "off" | "youtube" | "all";
   stripe?: {
     mode?: "live" | "test";
     product_id?: string;

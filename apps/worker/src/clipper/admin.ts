@@ -147,13 +147,56 @@ export async function paymentsSetup(env: Env): Promise<Response> {
 /** GET/PATCH /v1/admin/settings — switches the admin can flip without a redeploy. */
 export async function settings(req: Request, env: Env): Promise<Response> {
   if (req.method === "PATCH") {
-    const b = await body<{ guest_mode?: boolean }>(req);
+    const b = await body<{ guest_mode?: boolean; home_runner?: string }>(req);
     if (typeof b.guest_mode === "boolean") await updateSettings(env, (s) => ({ ...s, guest_mode: b.guest_mode }));
+    if (b.home_runner && ["off", "youtube", "all"].includes(b.home_runner)) {
+      await updateSettings(env, (s) => ({ ...s, home_runner: b.home_runner as "off" | "youtube" | "all" }));
+    }
   }
   const s = await getSettings(env);
   return json({
     guest_mode: await guestModeOn(env),
     guest_mode_forced_off: (env.CLIPPER_GUEST_MODE ?? "").trim().toLowerCase() === "off",
+    home_runner: s.home_runner ?? "off",
     updated_at: s.updated_at ?? null,
+  });
+}
+
+/**
+ * GET /v1/admin/system — is everything the app depends on actually working?
+ * Each key is TESTED (a cheap authenticated call), not just checked for
+ * presence — a set-but-revoked key is the failure that hides longest.
+ * Keys are never returned, only whether they work.
+ */
+export async function system(env: Env): Promise<Response> {
+  const v = (k: string) => String((env as unknown as Record<string, unknown>)[k] ?? "").trim();
+  const probe = async (key: string, url: string, header = "Authorization") => {
+    if (!key) return { set: false, works: false };
+    try {
+      const r = await fetch(url, { headers: { [header]: header === "Authorization" ? `Bearer ${key}` : key } });
+      return { set: true, works: r.ok, status: r.status };
+    } catch { return { set: true, works: false }; }
+  };
+  const [groq, openrouter, nvidia] = await Promise.all([
+    probe(v("GROQ_SECRET") || v("GROQ_API_KEY"), "https://api.groq.com/openai/v1/models"),
+    probe(v("OPENROUTER_API_KEY"), "https://openrouter.ai/api/v1/auth/key"),
+    probe(v("NVIDIA_SECRET") || v("NVIDIA_API_KEY"), "https://integrate.api.nvidia.com/v1/models"),
+  ]);
+  return json({
+    ai: {
+      groq: { ...groq, role: "Transcription (fast, ~1 min per hour of audio) + AI fallback", fix: "Create a key at console.groq.com → API Keys, then set it as the Worker secret GROQ_SECRET." },
+      openrouter: { ...openrouter, role: "Clip judging and headlines", fix: "Create a key at openrouter.ai/keys, set it as OPENROUTER_API_KEY." },
+      nvidia: { ...nvidia, role: "Last-resort AI fallback", fix: "Create a key at build.nvidia.com, set it as NVIDIA_SECRET." },
+    },
+    transcription: groq.works ? "Groq (fast)" : "Built-in Whisper on the runner (slower: ~12 min per hour of audio)",
+    email: { provider: v("GAS_EMAIL_URL") ? "Gmail (Apps Script)" : v("RESEND_API_KEY") ? "Resend" : null, from: v("CLIPPER_EMAIL_FROM") || null },
+    payments: { stripe_key: !!(v("CLIPPER_STRIPE_SECRET_KEY") || v("STRIPE_SECRET_KEY")) },
+    posting: {
+      youtube: !!(v("GOOGLE_CLIENT_ID") && v("GOOGLE_CLIENT_SECRET")),
+      tiktok: !!(v("TIKTOK_CLIENT_KEY") && v("TIKTOK_CLIENT_SECRET")),
+      instagram: !!(v("META_APP_ID") && v("META_APP_SECRET")),
+      redirect_uri_pattern: `${(env.CLIPPER_API_URL || "https://apex-api.fitnessguru.workers.dev").replace(/\/$/, "")}/v1/connect/<youtube|tiktok|instagram>/callback`,
+    },
+    admins: (env.CLIPPER_ADMIN_EMAILS ?? "").split(",").filter((e) => e.trim()).length,
   });
 }

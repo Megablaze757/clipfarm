@@ -78,6 +78,7 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["POST", /^\/v1\/admin\/payments\/setup$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.paymentsSetup(env); })],
   ["GET", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
   ["PATCH", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
+  ["GET", /^\/v1\/admin\/system$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.system(env); })],
 
   // Posting to YouTube / TikTok / Instagram (social.ts)
   ["GET", /^\/v1\/connections$/, authed(async (_r, env, c) => social.listConnections(env, c))],
