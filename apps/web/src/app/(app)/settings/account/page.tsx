@@ -52,7 +52,7 @@ export default function AccountPage() {
             className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500" />
           <label className="flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="accent-indigo-500" /> Show passwords</label>
           {error && <p className="text-xs text-rose-300" role="alert">{error}</p>}
-          {saved && <p className="text-xs text-emerald-300" role="status">Password changed. It's the same login on PocketAthlete.</p>}
+          {saved && <p className="text-xs text-emerald-300" role="status">Password changed.</p>}
           <button disabled={busy} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-sm disabled:opacity-60">{busy ? 'Saving…' : 'Change password'}</button>
         </form>
       </section>

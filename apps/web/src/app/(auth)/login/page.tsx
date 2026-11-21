@@ -14,8 +14,8 @@ import { API_URL } from '@/lib/api'
  * Emails come from Clipper (the Worker's /v1/auth/*), and their links come back
  * here as ?token_hash=…&type=… which this page spends with verifyOtp — that
  * works in any browser or mail app, unlike Supabase's redirect links (which
- * need the browser that asked). If Clipper's email sender isn't available,
- * it falls back to Supabase's own emails so nobody is ever stuck.
+ * need the browser that asked). Every email is Clipper's own — never the
+ * shared account system's default (PocketAthlete-branded) templates.
  */
 type Mode = 'sign_in' | 'sign_up' | 'forgot'
 
@@ -77,18 +77,13 @@ function LoginForm() {
     })()
   }, [])
 
-  const redirectTo = (path: string) => `${window.location.origin}${process.env.NEXT_PUBLIC_BASE_PATH ?? (process.env.NODE_ENV === 'production' ? '/clipfarm' : '')}${path}`
-
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true); setError(null); setInfo(null)
     try {
       if (mode === 'forgot') {
         const r = await viaWorker('/v1/auth/recover', { email })
-        if (!r.ok) {
-          const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirectTo('/reset-password') })
-          if (error) throw error
-        }
+        if (!r.ok) throw new Error(workerError(r.data) ?? "We couldn't send the email just now — try again in a minute.")
         setInfo('If that email has an account, a reset link is on its way. Check your spam folder too.')
       } else if (mode === 'sign_in') {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -101,12 +96,7 @@ function LoginForm() {
         const r = await viaWorker('/v1/auth/signup', { email, password })
         if (r.ok && r.data?.exists) { setInfo(r.data.message); setMode('sign_in'); return }
         if (r.ok) { setInfo('Check your email to confirm your account — the link signs you straight in.'); setAwaitingConfirm(true); setCooldown(60); return }
-        if (r.status && r.status !== 503 && workerError(r.data)) throw new Error(workerError(r.data))
-        // Clipper's sender unavailable → Supabase's own confirmation email.
-        const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: redirectTo('/login') } })
-        if (error) throw error
-        if (data.user && (data.user.identities?.length ?? 0) === 0) { setInfo('That email already has an account — sign in, or use “Forgot password?”.'); setMode('sign_in'); return }
-        if (!data.session) { setInfo('Check your email to confirm your account, then sign in.'); setAwaitingConfirm(true) }
+        throw new Error(workerError(r.data) ?? "We couldn't create your account just now — try again in a minute.")
       }
     } catch (err) {
       setError((err as Error).message)
@@ -119,10 +109,7 @@ function LoginForm() {
     if (cooldown > 0 || !email) return
     setError(null); setInfo(null)
     const r = await viaWorker('/v1/auth/resend', { email })
-    if (!r.ok) {
-      const { error } = await supabase.auth.resend({ type: 'signup', email })
-      if (error) { setError(/rate|limit|seconds/i.test(error.message) ? 'Too many requests just now — wait a minute and try again.' : error.message); return }
-    }
+    if (!r.ok) { setError(workerError(r.data) ?? "We couldn't send it just now — try again in a minute."); return }
     setInfo(`Sent again to ${email}. It can take a minute — check your spam folder too.`)
     setCooldown(60)
   }
@@ -184,7 +171,7 @@ function LoginForm() {
           </button>
         </p>
         <p className="text-[11px] text-slate-500 text-center mt-3">
-          Already use PocketAthlete? Same email and password work here. <Link href="/projects" className="underline">Keep testing as a guest</Link>
+          <Link href="/projects" className="underline">Just looking? Try it as a guest</Link>
         </p>
       </div>
     </main>

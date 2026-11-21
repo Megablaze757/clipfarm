@@ -1,6 +1,5 @@
 import { appUrl, type Env } from "./env";
 import { ApiError, body, json } from "./http";
-import { sendEmail } from "../pocketathlete/index";
 
 /**
  * Clipper's own account emails.
@@ -56,9 +55,54 @@ function page(title: string, intro: string, button: string, link: string, outro:
   return { html, text: `${title}\n\n${intro}\n\n${button}: ${link}\n\n${outro}` };
 }
 
+/**
+ * CLIPPER'S OWN SENDER. Same delivery channels as PocketAthlete (its Gmail
+ * Apps Script or Resend — the Worker's existing secrets), but every email goes
+ * out as "Clipper": its own From name, and no PocketAthlete reply-to.
+ *
+ *   CLIPPER_EMAIL_FROM  e.g. "Clipper <hello@yourdomain.com>" (optional). By
+ *                       default: "Clipper" + the address the sender already
+ *                       uses (Gmail always sends from its own account; Resend
+ *                       needs a verified domain, so the address is kept).
+ *   CLIPPER_REPLY_TO    optional reply address just for Clipper.
+ */
+const v = (env: Env, name: string) => String((env as unknown as Record<string, unknown>)[name] ?? "").trim();
+export function clipperFrom(env: Env): string {
+  const explicit = v(env, "CLIPPER_EMAIL_FROM");
+  if (explicit) return explicit;
+  const shared = v(env, "REMINDER_FROM");
+  const address = (shared.match(/<([^>]+)>/)?.[1] ?? shared).trim();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address) ? `Clipper <${address}>` : "Clipper";
+}
+
 async function deliver(env: Env, to: string, subject: string, mail: { html: string; text: string }): Promise<void> {
-  const r = await sendEmail(env, to, subject, mail.html, mail.text);
-  if (!r.ok) throw new ApiError(503, "E_EMAIL_UNAVAILABLE", `couldn't send the email (${r.error ?? "no email provider"})`);
+  const from = clipperFrom(env), replyTo = v(env, "CLIPPER_REPLY_TO");
+  let ok = false, error = "no email provider is set on the Worker";
+  try {
+    const gas = v(env, "GAS_EMAIL_URL"), resendKey = v(env, "RESEND_API_KEY");
+    if (gas) {
+      const r = await fetch(gas, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret: v(env, "GAS_EMAIL_SECRET"), to, subject, html: mail.html, text: mail.text, from, ...(replyTo ? { replyTo } : {}) }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; message?: string };
+      ok = r.ok; error = j.error ?? j.message ?? `Gmail sender returned ${r.status}`;
+    } else if (resendKey) {
+      if (!from.includes("@")) throw new Error("set CLIPPER_EMAIL_FROM (e.g. Clipper <hello@yourdomain.com>) to send with Resend");
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST", headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, subject, html: mail.html, text: mail.text, ...(replyTo ? { reply_to: replyTo } : {}) }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { message?: string; name?: string };
+      ok = r.ok; error = j.message ?? j.name ?? `Resend returned ${r.status}`;
+    }
+  } catch (e) {
+    error = (e as Error).message;
+  }
+  if (!ok) {
+    console.error(`[clipper email] ${subject} → failed: ${error}`);
+    throw new ApiError(503, "E_EMAIL_UNAVAILABLE", "we couldn't send the email just now — try again in a minute");
+  }
 }
 
 /** POST /v1/auth/signup {email, password} — creates the account and sends a Clipper confirmation email. */
