@@ -38,6 +38,7 @@ interface EditState {
   background: Background
   tighten: boolean
   zoom: boolean
+  lang: string
 }
 
 type Background = { kind: 'none' } | { kind: 'builtin'; id: string; sound?: boolean } | { kind: 'upload'; key: string }
@@ -71,14 +72,14 @@ function toState(r: ClipResponse): EditState {
     t_in: r.clip.t_in_ms, t_out: r.clip.t_out_ms, title: r.clip.title ?? '',
     captionsOn: e.captions?.enabled !== false, style: e.captions?.style ?? 'karaoke_yellow', fixes,
     mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [], two: e.layout?.two ?? null,
-    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' }, tighten: e.tighten !== false, zoom: e.zoom !== false,
+    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' }, tighten: e.tighten !== false, zoom: e.zoom !== false, lang: e.captions?.lang ?? '',
   }
 }
 
 function toPatch(s: EditState) {
   return {
     t_in_ms: Math.round(s.t_in), t_out_ms: Math.round(s.t_out), title: s.title,
-    captions: { enabled: s.captionsOn, style: s.style, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
+    captions: { enabled: s.captionsOn, style: s.style, lang: s.lang || undefined, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
     layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' || s.mode === 'two' ? [] : s.keyframes, two: s.two },
     title_overlay: s.overlay, background: s.background, tighten: s.tighten, zoom: s.zoom,
   }
@@ -478,7 +479,12 @@ function Studio() {
             <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-300">
               <label className="flex items-center gap-2"><input type="checkbox" className="accent-indigo-500" checked={state.tighten} onChange={(e) => update((s) => ({ ...s, tighten: e.target.checked }))} />Cut long pauses and “um”s</label>
               <label className="flex items-center gap-2"><input type="checkbox" className="accent-indigo-500" checked={state.zoom} onChange={(e) => update((s) => ({ ...s, zoom: e.target.checked }))} />Zoom punch-ins</label>
-              <span className="text-[10px] text-slate-500">Applied when you export.</span>
+              <label className="flex items-center gap-2">Caption language
+                <select value={state.lang} onChange={(e) => update((s) => ({ ...s, lang: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200">
+                  {[['', 'Original'], ['es', 'Spanish'], ['pt', 'Portuguese'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['nl', 'Dutch'], ['pl', 'Polish'], ['tr', 'Turkish'], ['id', 'Indonesian']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <span className="text-[10px] text-slate-500">Applied when you export{state.lang ? ' — captions and headline are translated' : ''}.</span>
             </div>
             <label className="block text-xs text-slate-400">On-screen headline (shown for the whole clip)
               <input value={state.overlay} maxLength={80} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />

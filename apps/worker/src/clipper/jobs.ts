@@ -4,6 +4,7 @@ import { dispatchToContainer } from "./container";
 import { planFor, planForTenant, PRESETS } from "./plans";
 import { loadBrand, tastes } from "./brand";
 import { getSettings } from "./settings";
+import { LANGUAGES, translateCaptions } from "./translate";
 
 export const IN_FLIGHT = ["transcoding", "transcribing", "analyzing", "candidates", "scoring"];
 
@@ -123,7 +124,7 @@ interface ClipRow {
   t_in_ms: number; t_out_ms: number; edits: ClipEdits; status: string;
 }
 export interface ClipEdits {
-  captions?: { enabled?: boolean; style?: string; edits?: { word_index: number; text: string }[] };
+  captions?: { enabled?: boolean; style?: string; edits?: { word_index: number; text: string }[]; /** translate to (translate.ts) */ lang?: string };
   layout?: { mode?: "auto" | "center" | "manual" | "fit" | "two"; aspect?: string; keyframes?: { t_ms: number; cx: number }[]; two?: { a: number; b: number } | null };
   template_id?: string;
   title_overlay?: string;
@@ -200,6 +201,16 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },
     encode: { vcodec: "h264", crf: 21, preset: "veryfast", fps: preset.fps, faststart: true }, // veryfast: ~3x faster than medium; CRF 21 keeps quality well above what TikTok/Reels re-encode to
   };
+  // Translated captions (and headline), if the clip asks for a language.
+  const lang = edits.captions?.lang;
+  if (lang && LANGUAGES[lang] && spec.captions.mode === "burn") {
+    const tr = await translateCaptions(env, clip.id, spec.captions.words, edits.title_overlay, lang)
+      .catch((e) => { console.error(`translate ${clip.id} → ${lang}: ${String(e)}`); return null; });
+    if (tr) {
+      spec.captions.words = tr.words.map((w, i) => ({ i, w: w.w, t0: w.t0, t1: w.t1 }));
+      if (tr.headline && spec.overlays[0]) spec.overlays[0].text = tr.headline;
+    }
+  }
   await dbPatch(env, `render_jobs?id=eq.${job.id}`, { spec });
   await runJob(env, "render", job.id, {
     jobId: job.id, clipId: clip.id, tenantId: clip.tenant_id, projectId: spec.project_id, spec,
