@@ -11,6 +11,7 @@ import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import * as admin from "./admin";
 import * as social from "./social";
+import { checkProjectRate, clientErrors, reportClientError } from "./guards";
 import { getBrand, loadBrand, putBrand } from "./brand";
 import { passwordChanged, recover, resend, signup } from "./accounts";
 import { modelChain } from "../pocketathlete/index";
@@ -79,6 +80,8 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["GET", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
   ["PATCH", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
   ["GET", /^\/v1\/admin\/system$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.system(env); })],
+  ["GET", /^\/v1\/admin\/client-errors$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return json({ errors: await clientErrors(env) }); })],
+  ["POST", /^\/v1\/telemetry\/error$/, async (r, env) => reportClientError(r, env)],
 
   // Posting to YouTube / TikTok / Instagram (social.ts)
   ["GET", /^\/v1\/connections$/, authed(async (_r, env, c) => social.listConnections(env, c))],
@@ -198,6 +201,7 @@ async function createProject(req: Request, env: Env, caller: Caller, _p: string[
     throw new ApiError(400, "E_VALIDATION", "source.kind must be 'upload' or 'url'");
   }
 
+  await checkProjectRate(req, env, caller);
   const used = await minutesUsed(env, caller.tenantId);
   if (used >= caller.plan.monthlyMinutes) {
     throw new ApiError(403, "E_TENANT_QUOTA", `You've used all ${caller.plan.monthlyMinutes} source minutes on the ${caller.plan.label} plan this month. Upgrade to keep going.`);

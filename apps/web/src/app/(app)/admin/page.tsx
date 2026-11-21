@@ -318,7 +318,29 @@ function System() {
         ))}
       </section>
       <button onClick={load} className="text-xs underline text-slate-400">Test again</button>
+      <ClientErrors />
     </div>
+  )
+}
+
+/** Crashes reported from people's browsers (components/error-reporter.tsx). */
+function ClientErrors() {
+  const { data } = useLoad<{ errors: { message: string; path?: string; count: number; last: string; stack?: string }[] }>('/v1/admin/client-errors')
+  if (!data) return null
+  return (
+    <section className="glass-panel rounded-2xl p-5 border border-slate-800">
+      <h3 className="text-sm font-bold text-white mb-2">Recent errors in people's browsers</h3>
+      {!data.errors.length ? <p className="text-xs text-slate-400">None reported. 🎉</p> : (
+        <ul className="space-y-2 text-xs">
+          {data.errors.slice(0, 25).map((e, i) => (
+            <li key={i} className="border-b border-slate-800/80 pb-2">
+              <div className="text-rose-200 break-words">{e.message}</div>
+              <div className="text-[11px] text-slate-500">{e.path} · {e.count}× · last {fmtAgo(e.last)}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 
