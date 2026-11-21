@@ -41,6 +41,7 @@ export default function AccountPage() {
 
       <section className="glass-panel rounded-2xl p-6 border border-slate-800 space-y-2 text-sm">
         <div className="flex justify-between gap-4"><span className="text-slate-400">Email</span><span className="text-slate-100 truncate">{session.user.email}</span></div>
+        <div className="flex justify-between gap-4"><span className="text-slate-400">Posting</span><Link href="/settings/connections" className="text-indigo-300 underline text-xs">YouTube · TikTok · Instagram connections</Link></div>
         <div className="flex justify-between gap-4"><span className="text-slate-400">Plan</span><span className="text-slate-100">{me?.plan?.label ?? '…'} <Link href="/settings/billing" className="ml-2 text-xs text-indigo-300 underline">Billing</Link></span></div>
         {me?.is_admin && <div className="flex justify-between gap-4"><span className="text-slate-400">Role</span><span className="text-amber-200">Admin · <Link href="/admin" className="underline">Admin panel</Link></span></div>}
       </section>

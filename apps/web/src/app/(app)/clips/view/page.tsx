@@ -7,6 +7,7 @@ import { api, API_URL, authHeader, type Plan } from '@/lib/api'
 import { autoReframe, cxAt, type Keyframe } from '@/lib/reframe'
 import { GAMES } from '@/lib/games'
 import { GamePreview } from '@/components/game-preview'
+import { PostPanel } from '@/components/post-panel'
 import { formatPrecise } from '@/lib/tokens'
 import { wrapHeadline } from '@/lib/headline'
 import { CAPTION_LOOKS, isPowerWord, lookFor } from '@/lib/captions'
@@ -561,6 +562,8 @@ function Studio() {
               </div>
             )}
           </section>
+          <PostPanel clipId={id} renderId={renders.find((r) => r.status === 'completed' && r.download_url)?.id ?? null}
+            headline={state.overlay} title={state.title} />
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN
 import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import * as admin from "./admin";
+import * as social from "./social";
 import { getBrand, loadBrand, putBrand } from "./brand";
 import { passwordChanged, recover, resend, signup } from "./accounts";
 import { modelChain } from "../pocketathlete/index";
@@ -77,6 +78,14 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["POST", /^\/v1\/admin\/payments\/setup$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.paymentsSetup(env); })],
   ["GET", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
   ["PATCH", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
+
+  // Posting to YouTube / TikTok / Instagram (social.ts)
+  ["GET", /^\/v1\/connections$/, authed(async (_r, env, c) => social.listConnections(env, c))],
+  ["DELETE", /^\/v1\/connections\/(youtube|tiktok|instagram)$/, authed(async (_r, env, c, p) => social.disconnect(env, c, p[0]))],
+  ["GET", /^\/v1\/connect\/(youtube|tiktok|instagram)$/, authed(async (_r, env, c, p) => social.connectStart(env, c, p[0]))],
+  ["GET", /^\/v1\/connect\/(youtube|tiktok|instagram)\/callback$/, async (r, env, _ctx, p) => social.connectCallback(r, env, p[0])],
+  ["POST", new RegExp(`^/v1/clips/${UUID}/posts$`), authed(async (r, env, c, p, ctx) => social.createPosts(r, env, c, p[0], ctx))],
+  ["GET", new RegExp(`^/v1/clips/${UUID}/posts$`), authed(async (_r, env, c, p) => social.listPosts(env, c, p[0]))],
 
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],
