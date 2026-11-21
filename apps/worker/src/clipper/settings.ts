@@ -20,6 +20,10 @@ export interface Settings {
     set_up_at?: string;
   };
   updated_at?: string;
+  /** notifications.ts: everything before this was already emailed about. */
+  notify_cursor?: string;
+  /** notifications.ts: the UTC date the admin daily summary last went out. */
+  daily_sent?: string;
 }
 
 const KEY = "_clipper/settings.json";

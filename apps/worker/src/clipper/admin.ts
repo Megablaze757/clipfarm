@@ -24,6 +24,11 @@ const PAID = ["active", "trialing", "past_due"];
 
 /** GET /v1/admin/overview — the numbers that matter at a glance. */
 export async function overview(env: Env): Promise<Response> {
+  return json(await overviewData(env));
+}
+
+/** The same numbers, as data (the admin daily email uses them too). */
+export async function overviewData(env: Env) {
   const since = monthStart(), day = new Date(Date.now() - 86_400_000).toISOString();
   const [users, newUsers, tenants, subs, usage, projectsMonth, failedDay, inFlight, rendersMonth] = await Promise.all([
     dbCount(env, "profiles?select=id"),
@@ -43,7 +48,7 @@ export async function overview(env: Env): Promise<Response> {
     `tenants?id=in.(${[...new Set(subs.map((s) => s.tenant_id))].join(",") || "00000000-0000-0000-0000-000000000000"})&select=id,plan`);
   for (const t of tenantPlans) planOf.set(t.id, t.plan);
   const mrr = subs.reduce((sum, s) => sum + (PLANS[(planOf.get(s.tenant_id) ?? "free") as Plan["id"]]?.priceUsd ?? 0), 0);
-  return json({
+  return ({
     users, new_users_this_month: newUsers, workspaces: tenants.length, workspaces_by_plan: byPlan,
     paying: subs.length, mrr_usd: mrr,
     minutes_this_month: Math.round(usage.reduce((a, u) => a + Number(u.quantity || 0), 0)),

@@ -65,7 +65,7 @@ export function clipperFrom(env: Env): string {
 }
 
 /** Renders a template from email-templates/ and sends it as Clipper. */
-async function sendTemplate(env: Env, name: TemplateName, to: string, vars: { link?: string; when?: string } = {}): Promise<void> {
+export async function sendTemplate(env: Env, name: TemplateName, to: string, vars: Record<string, string | undefined> = {}): Promise<void> {
   const mail = renderEmail(name, { ...vars, email: to, app_url: appUrl(env) });
   await deliver(env, to, mail.subject, mail);
 }

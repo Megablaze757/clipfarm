@@ -15,12 +15,18 @@ import confirmSignup from "./email-templates/confirm-signup.html";
 import resetPassword from "./email-templates/reset-password.html";
 import signInLink from "./email-templates/sign-in-link.html";
 import passwordChanged from "./email-templates/password-changed.html";
+import clipsReady from "./email-templates/clips-ready.html";
+import adminAlert from "./email-templates/admin-alert.html";
+import adminDaily from "./email-templates/admin-daily.html";
 
 export const TEMPLATES = {
   "confirm-signup": confirmSignup,
   "reset-password": resetPassword,
   "sign-in-link": signInLink,
   "password-changed": passwordChanged,
+  "clips-ready": clipsReady,
+  "admin-alert": adminAlert,
+  "admin-daily": adminDaily,
 } as const;
 export type TemplateName = keyof typeof TEMPLATES;
 
@@ -56,11 +62,14 @@ export function toText(html: string, link?: string): string {
   return link ? `${body}\n\nLink: ${link}` : body;
 }
 
-export function renderEmail(name: TemplateName, vars: { link?: string; email: string; app_url: string; when?: string }):
+/** Vars fill both the body and the Subject/Preview lines (e.g. "{{ title }} is ready"). */
+export function renderEmail(name: TemplateName, vars: { link?: string; email: string; app_url: string; [k: string]: string | undefined }):
   { subject: string; html: string; text: string } {
   const tpl = TEMPLATES[name];
-  const { subject, preview } = meta(tpl);
-  const strings: Record<string, string> = { ...vars, link: vars.link ?? vars.app_url, when: vars.when ?? "" };
+  const strings: Record<string, string> = Object.fromEntries(Object.entries({ ...vars, link: vars.link ?? vars.app_url }).map(([k, v]) => [k, v ?? ""]));
+  const plain = (s: string) => s.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => strings[k] ?? "");
+  const { subject: rawSubject, preview: rawPreview } = meta(tpl);
+  const subject = plain(rawSubject), preview = plain(rawPreview);
   const content = fill(tpl.replace(/^\s*<!--[\s\S]*?-->\s*/, ""), strings);
   const html = fill(layout, { ...strings, subject, preheader: preview, content });
   return { subject, html, text: toText(content, vars.link) };
