@@ -109,7 +109,7 @@ interface ClipRow {
 }
 export interface ClipEdits {
   captions?: { enabled?: boolean; style?: string; edits?: { word_index: number; text: string }[] };
-  layout?: { mode?: "auto" | "center" | "manual" | "fit"; aspect?: string; keyframes?: { t_ms: number; cx: number }[] };
+  layout?: { mode?: "auto" | "center" | "manual" | "fit" | "two"; aspect?: string; keyframes?: { t_ms: number; cx: number }[]; two?: { a: number; b: number } | null };
   template_id?: string;
   title_overlay?: string;
   /** Split-screen footage under the speaker (see backgrounds.ts). */
@@ -157,10 +157,12 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     mezzanine_key: section ? section.key : project?.review_proxy_key || `${clip.tenant_id}/projects/${cand.project_id}/mezzanine/mezzanine.mp4`,
     output_key: `${clip.tenant_id}/projects/${cand.project_id}/renders/${job.id}.mp4`,
     trim: { in_ms: clip.t_in_ms - (section?.offset ?? 0), out_ms: clip.t_out_ms - (section?.offset ?? 0) },
-    crop: {
-      mode: edits.layout?.mode === "fit" ? "fit" : (edits.layout?.keyframes?.length ? "path" : "center"),
-      keyframes: (edits.layout?.keyframes ?? []).slice(0, 60),
-    },
+    crop: edits.layout?.mode === "two" && edits.layout.two
+      ? { mode: "two", keyframes: [], a: Number(edits.layout.two.a), b: Number(edits.layout.two.b) }
+      : {
+        mode: edits.layout?.mode === "fit" ? "fit" : (edits.layout?.keyframes?.length ? "path" : "center"),
+        keyframes: (edits.layout?.keyframes ?? []).slice(0, 60),
+      },
     scale: { w: preset.w, h: preset.h },
     captions: {
       mode: edits.captions?.enabled === false ? "none" : "burn",

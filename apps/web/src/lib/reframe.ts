@@ -97,7 +97,8 @@ export async function autoReframe(
     const xs = found.filter((s) => s.t >= turn.t0 && s.t < turn.t1).map((s) => s.cx as number)
     return { ...turn, cx: xs.length ? median(xs) : null }
   })
-  let prev = median(found.map((s) => s.cx as number))
+  // Start ON the first speaker (not blended toward the clip's average), then EMA.
+  let prev = perTurn.find((t) => t.cx != null)?.cx ?? median(found.map((s) => s.cx as number))
   const smoothed = perTurn.map((t) => {
     const target = t.cx ?? prev
     prev = prev + 0.7 * (target - prev) // EMA, mostly follows the new speaker

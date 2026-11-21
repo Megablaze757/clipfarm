@@ -15,7 +15,8 @@ export async function renderProxy(mezzanine: string, inMs: number, outMs: number
 
 export interface RenderSpec {
   trim: { in_ms: number; out_ms: number };
-  crop: { mode: "center" | "path" | "fit"; keyframes: { t_ms: number; cx: number }[] };
+  /** "two": two people stacked — a on top, b below (face centres, 0-1 of the width). */
+  crop: { mode: "center" | "path" | "fit" | "two"; keyframes: { t_ms: number; cx: number }[]; a?: number; b?: number };
   scale: { w: number; h: number };
   captions: { mode: "burn" | "none"; style_id: string; words: { w: string; t0: number; t1: number }[] };
   overlays: { type: "title"; text: string; t_ms: [number, number] }[];
@@ -107,7 +108,9 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
 
   // --- video graph ---
   // Split screen: the speaker fills the top half, the background the bottom.
-  const bg = spec.background && spec.background.kind !== "none" ? spec.background : null;
+  // Two-speaker layout takes the whole frame, so it replaces any background.
+  const twoUp = spec.crop.mode === "two" && spec.crop.a != null && spec.crop.b != null;
+  const bg = !twoUp && spec.background && spec.background.kind !== "none" ? spec.background : null;
   const topH = bg ? Math.round(h / 4) * 2 : h;
   const bgArgs: string[] = [];
   const isGame = bg?.kind === "builtin" && !!GAMES[bg.id];
@@ -133,7 +136,18 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const target = w / topH;
   const filters: string[] = [];
   let v = "[0:v]";
-  if (spec.crop.mode === "fit" && !bg) {
+  if (twoUp) {
+    // Two speakers stacked: the same frame cropped twice, one face per half.
+    const half = Math.round(h / 4) * 2, t2 = w / half;
+    const cw = Math.floor(Math.min(info.width, info.height * t2) / 2) * 2;
+    const ch = Math.floor(Math.min(info.height, cw / t2) / 2) * 2;
+    const xAt = (c: number) => Math.round(Math.max(0, Math.min(info.width - cw, c * info.width - cw / 2)));
+    const y = Math.floor((info.height - ch) / 2);
+    filters.push(`${v}split=2[sa][sb]`);
+    filters.push(`[sa]crop=${cw}:${ch}:${xAt(spec.crop.a!)}:${y},scale=${w}:${half}:flags=lanczos,setsar=1[ta]`);
+    filters.push(`[sb]crop=${cw}:${ch}:${xAt(spec.crop.b!)}:${y},scale=${w}:${h - half}:flags=lanczos,setsar=1[tb]`);
+    filters.push(`[ta][tb]vstack=inputs=2[v0]`);
+  } else if (spec.crop.mode === "fit" && !bg) {
     // Letterbox onto a blurred, zoomed copy of itself (§6.6 fallback ladder).
     filters.push(`${v}split=2[bgsrc][fgsrc]`);
     filters.push(`[bgsrc]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},boxblur=20:2,eq=brightness=-0.08[bg]`);
@@ -163,7 +177,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
       .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
       .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
     const assPath = join(dir, "captions.ass");
-    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg }));
+    await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg || twoUp }));
     filters.push(`${v}subtitles=filename='${assPath}':fontsdir='${FONTS_DIR}'[v${n}]`);
     v = `[v${n++}]`;
   }
@@ -174,7 +188,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     const [a, b] = o.t_ms;
     const fs = Math.round(w * 0.06), pad = Math.round(fs * 0.3), lineH = fs + pad * 2 + Math.round(fs * 0.12);
     const lines = wrapHeadline(o.text.toUpperCase(), 20).slice(0, 3);
-    const y0 = Math.round(h * (bg ? 0.035 : 0.1));
+    const y0 = Math.round(h * (bg || twoUp ? 0.035 : 0.1));
     const when = `enable='between(t,${(a / 1000).toFixed(2)},${(b / 1000).toFixed(2)})'`;
     lines.forEach((line, k) => {
       filters.push(`${v}drawtext=fontfile='${FONT}':text='${dt(line)}':fontsize=${fs}:fontcolor=black:box=1:boxcolor=white:boxborderw=${pad}:x=(w-text_w)/2:y=${y0 + k * lineH + pad}:${when}[v${n}]`);

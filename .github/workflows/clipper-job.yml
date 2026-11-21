@@ -104,6 +104,24 @@ jobs:
           path: ~/.cache/huggingface
           key: whisper-small-v1
 
+      # Automatic reframing: OpenCV + the YuNet face model (~230 KB), cached.
+      - name: Cache face model + pip
+        if: env.JOB_KIND == 'process'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/clipper-vision
+            ~/.cache/pip
+          key: vision-v1-${{ hashFiles('apps/container/scripts/requirements-vision.txt') }}
+      - name: Install face detection
+        if: env.JOB_KIND == 'process'
+        run: |
+          "${{ steps.py.outputs.python-path }}" -m pip install --quiet -r apps/container/scripts/requirements-vision.txt || echo "::warning::OpenCV install failed — clips will use a centre crop"
+          mkdir -p ~/clipper-vision
+          M=~/clipper-vision/face_detection_yunet_2023mar.onnx
+          [ -s "$M" ] || curl -sSfL https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx -o "$M" || echo "::warning::face model download failed"
+          [ "$(stat -c%s "$M" 2>/dev/null || echo 0)" -gt 100000 ] && echo "FACE_MODEL=$M" >> "$GITHUB_ENV" || echo "::warning::face model missing — clips will use a centre crop"
+
       # Installed packages are cached by lockfile, so most jobs skip `npm ci`.
       - name: Cache node_modules
         id: nm

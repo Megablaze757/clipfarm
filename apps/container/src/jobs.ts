@@ -13,6 +13,8 @@ import { chatNominations, nominateMoments } from "./pipeline/moments";
 import { chatSpikes, type ChatSignal } from "./pipeline/chat";
 import { alignSection, buildZoneAudio, downloadAudioOnly, downloadHlsSection, downloadSection, hlsPlaylist, downloadTwitchChat, LONG_MS, parseChatFile, probeLink, remapTranscript, spansGap, twitchVodId, zonesFromChat, zonesFromEnergy, type Zone } from "./pipeline/longform";
 import { isSiteUrl } from "./pipeline/ingest";
+import { trackClips } from "./pipeline/facetrack";
+import { existsSync } from "node:fs";
 import { ensureHeadlines, refineWithLLM } from "./pipeline/llm-scoring";
 import { MIN_CLIP_MS, snapBoundaries } from "./pipeline/boundaries";
 import { renderFinal, setBackgroundSource, type RenderSpec } from "./pipeline/render";
@@ -294,6 +296,31 @@ export async function processProject(job: ProcessJob): Promise<void> {
         rationale: c.rationale, proxy_uri: mediaKey, scorer_version: `${SCORER_VERSION}${c.features.model ? `+${c.features.model}` : ""}`,
       };
     });
+
+    // Automatic reframing: follow the speaker's face in every picked clip,
+    // and spot two-person shots (facetrack.ts). Never fatal.
+    try {
+      const t0 = Date.now();
+      const plans = await trackClips(picked, (i) => {
+        const r = rows[i];
+        if (!r) return null;
+        if (long) {
+          const f = r.features as { edit_offset_ms?: number };
+          const path = join(dir, `section_${i}.mp4`);
+          return existsSync(path) ? { path, offsetMs: f.edit_offset_ms ?? 0 } : null;
+        }
+        return { path: input, offsetMs: 0, inputArgs };
+      }, words, info.width > 0 && info.height > 0 ? info.width / info.height : 16 / 9, dir);
+      let framed = 0;
+      plans.forEach((p, i) => {
+        if (!p || !rows[i]) return;
+        (rows[i]!.features as Record<string, unknown>).auto_reframe = { mode: p.mode, keyframes: p.keyframes, two: p.two };
+        framed++;
+      });
+      if (framed) stage(`auto-reframed ${framed} clips in ${((Date.now() - t0) / 1000).toFixed(1)} s (${plans.filter((p) => p?.two).length} two-speaker)`);
+    } catch (e) {
+      console.warn(`auto-reframe skipped: ${(e as Error).message.slice(0, 200)}`);
+    }
     await mediaReady;
     if (!long) await supabase.from("artifacts").upsert({ project_id: projectId, stage: "media", uri: mediaKey, meta: { width: info.width, height: info.height, playable } }, { onConflict: "project_id,stage" });
     const saved = rows.filter((r): r is Record<string, unknown> => !!r);

@@ -409,3 +409,21 @@ test("headlines use the creator's real name, never a generic 'STREAMER'", () => 
   assert.equal(cleanHeadline("STREAMER'S MOM WALKS IN", src), "KAI CENAT'S MOM WALKS IN");
   assert.equal(cleanHeadline("Doctor explains sleep", {}), "DOCTOR EXPLAINS SLEEP");
 });
+
+test("auto-reframe: follows one face, finds two speakers, falls back without faces", () => {
+  const { planReframe } = require("../dist/pipeline/facetrack");
+  const words = []; for (let i = 0; i < 60; i++) words.push({ w: "hi", t0: i * 500, t1: i * 500 + 400, conf: 1, speaker: i < 30 ? "S1" : "S2" });
+  const one = Array.from({ length: 60 }, (_, k) => ({ t: k * 500, faces: [{ cx: 0.62, cy: 0.4, w: 0.2, h: 0.3 }] }));
+  const p1 = planReframe(one, words, 0, 30000, 16 / 9, 9 / 16);
+  assert.equal(p1.mode, "manual"); assert.equal(p1.keyframes.length, 1); assert.ok(Math.abs(p1.keyframes[0].cx - 0.62) < 0.01); assert.equal(p1.two, null);
+  // Two people side by side; S1 (left, bigger while talking) then S2 (right).
+  const both = Array.from({ length: 60 }, (_, k) => ({ t: k * 500, faces: [
+    { cx: 0.28, cy: 0.4, w: k < 30 ? 0.22 : 0.18, h: 0.3 }, { cx: 0.74, cy: 0.4, w: k < 30 ? 0.18 : 0.22, h: 0.3 }] }));
+  const p2 = planReframe(both, words, 0, 30000, 16 / 9, 9 / 16);
+  assert.ok(p2.two && Math.abs(p2.two.a - 0.28) < 0.01 && Math.abs(p2.two.b - 0.74) < 0.01, JSON.stringify(p2.two));
+  assert.ok(p2.keyframes.length >= 2, "pans between the speakers");
+  assert.ok(p2.keyframes[0].cx < 0.4 && p2.keyframes[p2.keyframes.length - 1].cx > 0.6);
+  // No faces in a wide shot → letterbox.
+  const none = Array.from({ length: 20 }, (_, k) => ({ t: k * 500, faces: [] }));
+  assert.equal(planReframe(none, words, 0, 10000, 16 / 9, 9 / 16).mode, "fit");
+});

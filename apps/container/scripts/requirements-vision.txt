@@ -1,0 +1,2 @@
+# Face detection for automatic reframing (scripts/face_detect.py — OpenCV YuNet).
+opencv-python-headless==4.10.0.84

@@ -307,6 +307,14 @@ async function ownClip(env: Env, caller: Caller, id: string) {
   return c;
 }
 
+/** The runner's auto-reframe plan → the clip's starting layout. */
+function autoLayout(plan: { mode?: string; keyframes?: { t_ms: number; cx: number }[]; two?: { a: number; b: number } | null } | undefined) {
+  const two = plan?.two && Number.isFinite(plan.two.a) && Number.isFinite(plan.two.b) ? { a: plan.two.a, b: plan.two.b } : null;
+  if (!plan) return { mode: "auto", aspect: "9:16" };
+  if (plan.mode === "fit") return { mode: "fit", aspect: "9:16", keyframes: [], two };
+  return { mode: "auto", aspect: "9:16", keyframes: (plan.keyframes ?? []).slice(0, 60), two };
+}
+
 async function createClip(req: Request, env: Env, caller: Caller): Promise<Response> {
   requireEditor(caller);
   const { candidate_id } = await body<{ candidate_id?: string }>(req);
@@ -321,7 +329,9 @@ async function createClip(req: Request, env: Env, caller: Caller): Promise<Respo
     title: cand.features?.title ?? cand.rationale ?? null,
     t_in_ms: cand.t_in_ms, t_out_ms: cand.t_out_ms,
     edits: {
-      captions: { enabled: true, style: "karaoke_yellow", edits: [] }, layout: { mode: "auto", aspect: "9:16" },
+      captions: { enabled: true, style: "karaoke_yellow", edits: [] },
+      // Framed on the speaker's face by the runner (facetrack.ts), if it found one.
+      layout: autoLayout(cand.features?.auto_reframe),
       // The engine's context headline ("KAI CENAT CRASHES OUT AT …"), editable in the editor.
       ...(cand.features?.context_title ? { title_overlay: String(cand.features.context_title).slice(0, 80) } : {}),
     },

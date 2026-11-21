@@ -28,7 +28,8 @@ interface EditState {
   captionsOn: boolean
   style: string
   fixes: Record<number, string>
-  mode: 'auto' | 'center' | 'fit' | 'manual'
+  mode: 'auto' | 'center' | 'fit' | 'manual' | 'two'
+  two: { a: number; b: number } | null
   aspect: string
   keyframes: Keyframe[]
   overlay: string
@@ -65,7 +66,7 @@ function toState(r: ClipResponse): EditState {
   return {
     t_in: r.clip.t_in_ms, t_out: r.clip.t_out_ms, title: r.clip.title ?? '',
     captionsOn: e.captions?.enabled !== false, style: e.captions?.style ?? 'karaoke_yellow', fixes,
-    mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [],
+    mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [], two: e.layout?.two ?? null,
     overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' },
   }
 }
@@ -74,7 +75,7 @@ function toPatch(s: EditState) {
   return {
     t_in_ms: Math.round(s.t_in), t_out_ms: Math.round(s.t_out), title: s.title,
     captions: { enabled: s.captionsOn, style: s.style, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
-    layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' ? [] : s.keyframes },
+    layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' || s.mode === 'two' ? [] : s.keyframes, two: s.two },
     title_overlay: s.overlay, background: s.background,
   }
 }
@@ -112,6 +113,7 @@ function Studio() {
   }
   const [exporting, setExporting] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const video2Ref = useRef<HTMLVideoElement>(null) // two-speaker preview: the lower half
   const frameRef = useRef<HTMLDivElement>(null)
   const [srcAspect, setSrcAspect] = useState(16 / 9)
   // The editor video is a short preview of just this clip's neighbourhood
@@ -190,6 +192,12 @@ function Studio() {
         const t = fromVideo(v.currentTime)
         if (!v.paused && t >= state.t_out) { v.pause(); v.currentTime = toVideo(state.t_in) }
         setNow(t)
+        // Two-speaker preview: the lower video mirrors the upper one.
+        const v2 = video2Ref.current
+        if (v2) {
+          if (Math.abs(v2.currentTime - v.currentTime) > 0.25) v2.currentTime = v.currentTime
+          if (v.paused !== v2.paused) { if (v.paused) v2.pause(); else v2.play().catch(() => {}) }
+        }
       }
       raf = requestAnimationFrame(tick)
     }
@@ -262,10 +270,12 @@ function Studio() {
   const cx = state.mode === 'center' ? 0.5 : cxAt(state.keyframes, rel)
   const frameH = 460
   const frameW = Math.round(frameH * aspect.ratio)
-  const split = state.background.kind !== 'none'
-  const topH = split ? frameH / 2 : frameH
+  const twoUp = state.mode === 'two' && !!state.two
+  const split = !twoUp && state.background.kind !== 'none'
+  const topH = split || twoUp ? frameH / 2 : frameH
   const vidW = topH * srcAspect
-  const left = state.mode === 'fit' && !split ? (frameW - vidW) / 2 : Math.min(0, Math.max(frameW - vidW, frameW / 2 - cx * vidW))
+  const place = (c: number) => Math.min(0, Math.max(frameW - vidW, frameW / 2 - c * vidW))
+  const left = state.mode === 'fit' && !split ? (frameW - vidW) / 2 : place(twoUp ? state.two!.a : cx)
   // Trimming can only go as far as the preview covers.
   const editUrl = data.candidate?.edit_url ?? data.project?.review_url ?? null
   const editEnd = data.candidate?.edit_url ? offRef.current + Number(data.candidate?.features?.edit_duration_ms ?? 0) : Infinity
@@ -304,6 +314,12 @@ function Studio() {
                   className="absolute top-0 max-w-none cursor-pointer"
                   style={state.mode === 'fit' && !split ? { width: frameW, height: frameW / srcAspect, top: (frameH - frameW / srcAspect) / 2, left: 0 } : { height: topH, width: vidW, left }} />
               ) : <div className="absolute inset-0 grid place-items-center text-xs text-slate-500 p-6 text-center">The review video is still being prepared.</div>}
+              {twoUp && editUrl && (
+                <div className="absolute inset-x-0 bottom-0 overflow-hidden border-t-2 border-black" style={{ height: frameH - topH }}>
+                  <video ref={video2Ref} src={editUrl} muted playsInline preload="auto" className="absolute top-0 max-w-none pointer-events-none"
+                    style={{ height: frameH - topH, width: (frameH - topH) * srcAspect, left: Math.min(0, Math.max(frameW - (frameH - topH) * srcAspect, frameW / 2 - state.two!.b * (frameH - topH) * srcAspect)) }} />
+                </div>
+              )}
               {split && (
                 <div className="absolute inset-x-0 bottom-0 overflow-hidden" style={{ height: frameH - topH, background: state.background.kind === 'builtin' ? BUILTIN_PREVIEW[state.background.id] : '#000' }}>
                   {state.background.kind === 'builtin' && GAMES[state.background.id] && <GamePreview id={state.background.id} className="w-full h-full object-cover" />}
@@ -450,18 +466,32 @@ function Studio() {
               <button onClick={runReframe} disabled={reframing != null || !editUrl} className="px-3 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50">
                 {reframing != null ? 'Tracking…' : 'Auto-frame the speaker'}
               </button>
+              <button onClick={() => update((s) => ({ ...s, mode: 'two', keyframes: [], two: s.two ?? data?.candidate?.features?.auto_reframe?.two ?? { a: 0.3, b: 0.7 } }))}
+                className={`px-3 py-2 rounded-lg text-xs border ${state.mode === 'two' ? 'border-indigo-500 text-white' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>
+                Two speakers{data?.candidate?.features?.auto_reframe?.two ? ' ✓' : ''}
+              </button>
               {(['center', 'fit'] as const).map((m) => (
                 <button key={m} onClick={() => update((s) => ({ ...s, mode: m, keyframes: [] }))}
                   className={`px-3 py-2 rounded-lg text-xs border ${state.mode === m ? 'border-indigo-500 text-white' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{m === 'center' ? 'Centre crop' : 'Fit (blurred bars)'}</button>
               ))}
             </div>
-            {state.mode !== 'fit' && (
+            {state.mode === 'two' && state.two && (
+              <div className="space-y-2">
+                {(['a', 'b'] as const).map((k) => (
+                  <label key={k} className="block text-xs text-slate-400">{k === 'a' ? 'Top person' : 'Bottom person'}
+                    <input type="range" min={0} max={1} step={0.01} value={state.two![k]} className="w-full accent-indigo-500"
+                      onChange={(e) => update((s) => ({ ...s, two: { ...(s.two ?? { a: 0.3, b: 0.7 }), [k]: Number(e.target.value) } }))} />
+                  </label>
+                ))}
+              </div>
+            )}
+            {state.mode !== 'fit' && state.mode !== 'two' && (
               <label className="block text-xs text-slate-400">Manual position (locks a static crop)
                 <input type="range" min={0} max={1} step={0.01} value={cx} className="w-full accent-indigo-500"
                   onChange={(e) => update((s) => ({ ...s, mode: 'manual', keyframes: [{ t_ms: 0, cx: Number(e.target.value) }] }))} />
               </label>
             )}
-            <p className="text-[11px] text-slate-500">{reframeNote ?? (state.keyframes.length > 1 ? `Following the speaker (${state.keyframes.length} keyframes).` : state.mode === 'fit' ? 'Whole frame, letterboxed.' : 'Static crop.')}</p>
+            <p className="text-[11px] text-slate-500">{state.mode === 'two' ? 'Two speakers stacked — one face per half, captions in the middle.' : reframeNote ?? (state.keyframes.length > 1 ? `Following the speaker (${state.keyframes.length} keyframes).` : state.mode === 'fit' ? 'Whole frame, letterboxed.' : 'Static crop.')}</p>
           </section>
 
           <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
