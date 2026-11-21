@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { ffmpeg, ffmpegFromStdin, probe } from "../lib/proc";
 import { GAME_H, GAME_HOOKS, GAME_W, GAMES, renderGame, type Sfx } from "./games";
 import { synthSfx } from "./sfx";
+import { cutTotal, enableExpr, isFiller, keepExpr, mapTime, planCuts, planZooms } from "./tighten";
 import { buildAss, type CapWord } from "./captions";
 
 /** Grid proxy (§7.1): 9:16 centre crop, 360×640, CRF 30 — ~15 % of a final's cost. */
@@ -24,6 +25,10 @@ export interface RenderSpec {
   /** Split screen: speaker on top, this footage below (absent/none = full frame). */
   background?: { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
   watermark: boolean;
+  /** Cut long pauses and "um/uh" (default on for new clips). */
+  tighten?: boolean;
+  /** Jump-zoom punch-ins on punch words and every ~6 s. */
+  zoom?: boolean;
   /** Brand kit (brand.ts on the Worker): logo + colours. */
   brand?: { logo?: string | null; logo_position?: string; colors?: { active?: string; keyword?: string; headline_bg?: string; headline_text?: string } } | null;
   audio: { loudnorm: { target_lufs: number; tp: number } };
@@ -109,6 +114,17 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const durS = (spec.trim.out_ms - spec.trim.in_ms) / 1000;
   const ss = (spec.trim.in_ms / 1000).toFixed(3);
 
+  // Tightening: what to cut, and where everything lands afterwards (tighten.ts).
+  const clipWordsRel = spec.captions.words
+    .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
+    .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
+  const cuts = spec.tighten ? planCuts(clipWordsRel, durS * 1000) : [];
+  const outMs = durS * 1000 - cutTotal(cuts);
+  const shown = clipWordsRel
+    .filter((x) => !(cuts.length && isFiller(x.w)))
+    .map((x) => ({ ...x, t0: mapTime(x.t0, cuts), t1: mapTime(x.t1, cuts) }));
+  const asel = cuts.length ? `aselect=${keepExpr(cuts)},asetpts=N/SR/TB,` : "";
+
   // --- video graph ---
   // Split screen: the speaker fills the top half, the background the bottom.
   // Two-speaker layout takes the whole frame, so it replaces any background.
@@ -147,6 +163,10 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const target = w / topH;
   const filters: string[] = [];
   let v = "[0:v]";
+  if (cuts.length) {
+    filters.push(`[0:v]select=${keepExpr(cuts)},setpts=N/FRAME_RATE/TB[cut]`);
+    v = "[cut]";
+  }
   if (twoUp) {
     // Two speakers stacked: the same frame cropped twice, one face per half.
     const half = Math.round(h / 4) * 2, t2 = w / half;
@@ -167,10 +187,23 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   } else {
     const cropW = Math.floor(Math.min(info.width, info.height * target) / 2) * 2;
     const cropH = Math.floor(Math.min(info.height, cropW / target) / 2) * 2;
-    const x = spec.crop.mode === "path" ? cropXExpr(spec.crop.keyframes, info.width, cropW) : String(Math.floor((info.width - cropW) / 2));
+    const keys = spec.crop.keyframes.map((k) => ({ ...k, t_ms: mapTime(k.t_ms, cuts) }));
+    const x = spec.crop.mode === "path" ? cropXExpr(keys, info.width, cropW) : String(Math.floor((info.width - cropW) / 2));
     filters.push(`${v}crop=${cropW}:${cropH}:${x}:${Math.floor((info.height - cropH) / 2)},scale=${w}:${topH}:flags=lanczos,setsar=1[v0]`);
   }
   v = "[v0]";
+  // Punch-ins: an instant ~12 % zoom on punch words and every ~6 s (a cut, not
+  // a slow zoom — that's the viral style, and it can't wobble).
+  if (spec.zoom && !twoUp && !(spec.crop.mode === "fit" && !bg)) {
+    const segs = planZooms(shown, outMs);
+    if (segs.length) {
+      const zw = Math.round(w / 1.12 / 2) * 2, zh = Math.round(topH / 1.12 / 2) * 2;
+      filters.push(`[v0]split=2[za][zb]`);
+      filters.push(`[zb]crop=${zw}:${zh}:(in_w-${zw})/2:(in_h-${zh})/2,scale=${w}:${topH}:flags=lanczos,setsar=1[zz]`);
+      filters.push(`[za][zz]overlay=0:0:enable=${enableExpr(segs)}[vz]`);
+      v = "[vz]";
+    }
+  }
   if (bg) {
     const bh = h - topH;
     // Games carry their challenge line ("WILL IT ESCAPE?") along the bottom.
@@ -179,14 +212,12 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
       ? `,drawtext=fontfile='${join(FONTS_DIR, "Anton-Regular.ttf")}':text='${dt(hookLine)}':fontsize=${Math.round(bh * 0.072)}:fontcolor=white:borderw=${Math.max(3, Math.round(bh * 0.008))}:bordercolor=black:x=(w-text_w)/2:y=h-text_h-${Math.round(bh * 0.05)}`
       : "";
     filters.push(`[1:v]scale=${w}:${bh}:force_original_aspect_ratio=increase:flags=${bg.kind === "builtin" && !isGame ? "neighbor" : "bicubic"},crop=${w}:${bh},setsar=1,fps=${spec.encode.fps}${label}[bgv]`);
-    filters.push(`[v0][bgv]vstack=inputs=2:shortest=1[vs]`);
+    filters.push(`${v}[bgv]vstack=inputs=2:shortest=1[vs]`);
     v = "[vs]";
   }
   let n = 1;
-  if (spec.captions.mode === "burn" && spec.captions.words.length) {
-    const rel: CapWord[] = spec.captions.words
-      .map((x) => ({ w: x.w, t0: x.t0 - spec.trim.in_ms, t1: x.t1 - spec.trim.in_ms }))
-      .filter((x) => x.t1 > 0 && x.t0 < durS * 1000);
+  if (spec.captions.mode === "burn" && shown.length) {
+    const rel: CapWord[] = shown;
     const assPath = join(dir, "captions.ass");
     await writeFile(assPath, buildAss(rel, spec.captions.style_id, w, h, { middle: !!bg || twoUp, colors: spec.brand?.colors }));
     filters.push(`${v}subtitles=filename='${assPath}':fontsdir='${FONTS_DIR}'[v${n}]`);
@@ -240,7 +271,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const measure = (async () => {
     if (!info.hasAudio) return base;
     try {
-      const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${base}:print_format=json`, "-f", "null", "-"]);
+      const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${asel}${base}:print_format=json`, "-f", "null", "-"]);
       const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
       if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
         return `${base}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
@@ -265,7 +296,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     "-ss", ss, ...inputArgs, "-i", mezzanine,
     "-i", sfxFile,
     "-t", durS.toFixed(3),
-    "-filter_complex", `[1:a:0]${af},aresample=48000[sp];[2:a]aresample=48000,volume=0.16[fx];[sp][fx]amix=inputs=2:duration=first:normalize=0[a]`,
+    "-filter_complex", `[1:a:0]${asel}${af},aresample=48000[sp];[2:a]aresample=48000,volume=0.16[fx];[sp][fx]amix=inputs=2:duration=first:normalize=0[a]`,
     "-map", "0:v:0", "-map", "[a]", "-c:v", "copy",
     "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart", out,
@@ -274,8 +305,8 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     "-ss", ss, ...inputArgs, "-i", mezzanine,
     "-t", durS.toFixed(3),
     "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
-    "-af", `${af},aresample=48000`, "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+    "-af", `${asel}${af},aresample=48000`, "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart", out,
   ], 10 * 60 * 1000);
-  return { durationMs: Math.round(durS * 1000) };
+  return { durationMs: Math.round(outMs) };
 }

@@ -36,6 +36,8 @@ interface EditState {
   keyframes: Keyframe[]
   overlay: string
   background: Background
+  tighten: boolean
+  zoom: boolean
 }
 
 type Background = { kind: 'none' } | { kind: 'builtin'; id: string; sound?: boolean } | { kind: 'upload'; key: string }
@@ -69,7 +71,7 @@ function toState(r: ClipResponse): EditState {
     t_in: r.clip.t_in_ms, t_out: r.clip.t_out_ms, title: r.clip.title ?? '',
     captionsOn: e.captions?.enabled !== false, style: e.captions?.style ?? 'karaoke_yellow', fixes,
     mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [], two: e.layout?.two ?? null,
-    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' },
+    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' }, tighten: e.tighten !== false, zoom: e.zoom !== false,
   }
 }
 
@@ -78,7 +80,7 @@ function toPatch(s: EditState) {
     t_in_ms: Math.round(s.t_in), t_out_ms: Math.round(s.t_out), title: s.title,
     captions: { enabled: s.captionsOn, style: s.style, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
     layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' || s.mode === 'two' ? [] : s.keyframes, two: s.two },
-    title_overlay: s.overlay, background: s.background,
+    title_overlay: s.overlay, background: s.background, tighten: s.tighten, zoom: s.zoom,
   }
 }
 
@@ -472,6 +474,11 @@ function Studio() {
                 </label>
               )}
               <p className="text-[10px] text-slate-500">Upload your own gameplay recording (MP4/MOV/WebM, under 95 MB — a 1–3 minute loop is plenty; it loops and starts at a different point each export). Use footage you recorded or have the rights to. Uploads are deleted after 7 days.</p>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-300">
+              <label className="flex items-center gap-2"><input type="checkbox" className="accent-indigo-500" checked={state.tighten} onChange={(e) => update((s) => ({ ...s, tighten: e.target.checked }))} />Cut long pauses and “um”s</label>
+              <label className="flex items-center gap-2"><input type="checkbox" className="accent-indigo-500" checked={state.zoom} onChange={(e) => update((s) => ({ ...s, zoom: e.target.checked }))} />Zoom punch-ins</label>
+              <span className="text-[10px] text-slate-500">Applied when you export.</span>
             </div>
             <label className="block text-xs text-slate-400">On-screen headline (shown for the whole clip)
               <input value={state.overlay} maxLength={80} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />

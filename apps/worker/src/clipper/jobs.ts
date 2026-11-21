@@ -127,6 +127,10 @@ export interface ClipEdits {
   layout?: { mode?: "auto" | "center" | "manual" | "fit" | "two"; aspect?: string; keyframes?: { t_ms: number; cx: number }[]; two?: { a: number; b: number } | null };
   template_id?: string;
   title_overlay?: string;
+  /** Cut long pauses and "um/uh" on export (default on). */
+  tighten?: boolean;
+  /** Jump-zoom punch-ins on export (default on). */
+  zoom?: boolean;
   /** Split-screen footage under the speaker (see backgrounds.ts). */
   background?: { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
 }
@@ -189,6 +193,8 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     // The headline stays up for the whole clip — it's the context, not an intro card.
     overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, clip.t_out_ms - clip.t_in_ms] }] : [],
     watermark: planFor(tenant?.plan).watermark, // FR-11.6 — decided here, never by the client
+    tighten: edits.tighten !== false,
+    zoom: edits.zoom !== false,
     // Brand kit: logo in a corner, caption + headline colours (brand.ts).
     brand: await loadBrand(env, clip.tenant_id).then((b) => (b ? { logo: b.logo ?? null, logo_position: b.logo_position, colors: b.colors ?? {} } : null)).catch(() => null),
     audio: { loudnorm: { target_lufs: -14, tp: -1.5 } },

@@ -384,7 +384,7 @@ async function getClip(_r: Request, env: Env, caller: Caller, p: string[]): Prom
 async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
   requireEditor(caller);
   const clip = await ownClip(env, caller, p[0]);
-  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; background?: unknown; template_id?: string; title_overlay?: string; status?: string }>(req);
+  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; background?: unknown; tighten?: boolean; zoom?: boolean; template_id?: string; title_overlay?: string; status?: string }>(req);
   const t_in = b.t_in_ms != null ? Math.round(Number(b.t_in_ms)) : clip.t_in_ms;
   const t_out = b.t_out_ms != null ? Math.round(Number(b.t_out_ms)) : clip.t_out_ms;
   const dur = t_out - t_in;
@@ -394,6 +394,8 @@ async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): P
   if (b.layout) edits.layout = { ...(edits.layout ?? {}), ...b.layout, keyframes: (b.layout.keyframes ?? edits.layout?.keyframes ?? []).slice(0, 60) };
   const bg = await checkBackground(env, caller, b.background);
   if (bg) edits.background = bg;
+  if (typeof b.tighten === "boolean") edits.tighten = b.tighten;
+  if (typeof b.zoom === "boolean") edits.zoom = b.zoom;
   if (b.template_id !== undefined) edits.template_id = b.template_id;
   if (b.title_overlay !== undefined) edits.title_overlay = String(b.title_overlay).slice(0, 80);
   const patch: Record<string, unknown> = { t_in_ms: t_in, t_out_ms: t_out, edits, updated_at: new Date().toISOString() };

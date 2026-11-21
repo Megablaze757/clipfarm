@@ -462,3 +462,24 @@ test("brand kit colours override the caption style", () => {
   assert.ok(ass.includes(`${BS}c&H00FF0000}$500`), "power word in brand blue");
   assert.doesNotMatch(buildAss(words, "classic", 1080, 1920, { colors: { active: "#ff0000" } }), /&H000000FF/); // classic has no highlight
 });
+
+test("tightening: pauses shrink, ums go, times map; punch-ins land on punch words", () => {
+  const { planCuts, mapTime, cutTotal, planZooms, keepExpr, isFiller } = require("../dist/pipeline/tighten");
+  const words = [
+    { w: "So", t0: 0, t1: 300 }, { w: "um", t0: 400, t1: 700 }, { w: "I", t0: 800, t1: 900 },
+    { w: "made", t0: 950, t1: 1200 }, { w: "$500", t0: 3200, t1: 3700 }, // 2 s pause before $500
+    { w: "today", t0: 3750, t1: 4100 },
+  ];
+  for (let i = 0; i < 30; i++) words.push({ w: "and", t0: 4200 + i * 400, t1: 4500 + i * 400 });
+  const dur = 16200;
+  const cuts = planCuts(words, dur);
+  assert.ok(cuts.some((c) => c.a <= 400 && c.b >= 700), "the 'um' is cut");
+  assert.ok(cuts.some((c) => c.a >= 1200 && c.b <= 3200 && c.b - c.a > 1500), "the long pause shrinks");
+  assert.ok(cutTotal(cuts) <= dur * 0.35);
+  assert.ok(isFiller("Um,") && !isFiller("umbrella"));
+  // $500 started at 3.2 s; after the cuts it starts earlier, and order is kept.
+  assert.ok(mapTime(3200, cuts) < 3200 && mapTime(3200, cuts) > mapTime(1200, cuts));
+  assert.match(keepExpr(cuts), /^not\(between\(t/);
+  const zooms = planZooms(words.map((w) => ({ ...w, t0: mapTime(w.t0, cuts), t1: mapTime(w.t1, cuts) })), dur - cutTotal(cuts));
+  assert.ok(zooms.some((z) => z.a <= mapTime(3200, cuts) && z.b >= mapTime(3700, cuts)), "punch-in on $500");
+});
