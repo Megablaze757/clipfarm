@@ -3,7 +3,7 @@ import { dbJson } from "./db";
 import { dispatchProject, dispatchRender, failStale } from "./jobs";
 import { reportUsage } from "./billing";
 import { sendNotifications } from "./notifications";
-import { runDuePosts } from "./social";
+import { measurePosts, runDuePosts } from "./social";
 
 /** Must match the third entry in wrangler.toml [triggers].crons. */
 export const CLIPPER_CRON = "*/10 * * * *";
@@ -36,6 +36,7 @@ export async function clipperScheduled(env: Env, _ctx: ExecutionContext): Promis
     ["expire-exports", () => expireExports(env)],
     ["notifications", () => sendNotifications(env)],
     ["scheduled-posts", () => runDuePosts(env)],
+    ["measure-posts", () => measurePosts(env)],
   ];
   for (const [name, job] of jobs) {
     try { await job(); } catch (e) { console.error(`[clipper cron] ${name}: ${String(e)}`); }

@@ -8,7 +8,7 @@ import { api } from '@/lib/api'
  * now or at a set time (up to 6 days ahead). Only connected accounts show.
  */
 interface Conn { platform: string; label: string; available: boolean; connected: boolean; account: string | null }
-interface Post { id: string; platform: string; scheduled_for: string; status: string; result?: string; error?: string }
+interface Post { id: string; platform: string; scheduled_for: string; status: string; result?: string; error?: string; views?: number; verdict?: string }
 
 export function PostPanel({ clipId, renderId, headline, title }: { clipId: string; renderId: string | null; headline: string; title: string }) {
   const [conns, setConns] = useState<Conn[] | null>(null)
@@ -78,6 +78,7 @@ export function PostPanel({ clipId, renderId, headline, title }: { clipId: strin
               <span className={p.status === 'posted' ? 'text-emerald-300' : p.status === 'failed' ? 'text-rose-300' : 'text-amber-200'}>
                 {p.status === 'posted' && p.result?.startsWith('http') ? <a href={p.result} target="_blank" rel="noreferrer" className="underline">posted</a> : p.status}
                 {p.error ? `: ${p.error}` : p.status === 'posted' && p.result && !p.result.startsWith('http') ? ` — ${p.result}` : ''}
+                {typeof p.views === 'number' && ` · ${p.views.toLocaleString()} views${p.verdict === 'good' ? ' 🔥' : p.verdict === 'flopped' ? ' (below your usual)' : ''}`}
               </span>
             </li>
           ))}

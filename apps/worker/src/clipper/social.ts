@@ -1,7 +1,7 @@
 import { apiUrl, appUrl, internalSecret, type Env } from "./env";
 import type { Caller } from "./auth";
 import { requireEditor } from "./auth";
-import { dbOne } from "./db";
+import { dbInsert, dbOne } from "./db";
 import { ApiError, body, json, requireUuid } from "./http";
 import { signedUrl } from "./media";
 
@@ -169,6 +169,10 @@ export interface Post {
   id: string; tenant_id: string; clip_id: string; media_key: string;
   platform: Platform; title: string; caption: string; privacy?: "public" | "unlisted" | "private";
   scheduled_for: string; status: "scheduled" | "posting" | "posted" | "failed"; result?: string; error?: string; created_at: string;
+  /** Who posted it (feedback rows need a real user) and when it went live. */
+  user_id?: string; posted_at?: string;
+  /** Measured once, ~48 h after posting (measurePosts). */
+  views?: number; measured_at?: string; verdict?: "good" | "flopped" | "neutral";
 }
 const postKey = (id: string) => `_clipper/posts/${id}.json`;
 const mediaKey = (id: string) => `_clipper/postmedia/${id}.mp4`;
@@ -227,7 +231,7 @@ async function publish(env: Env, post: Post): Promise<string> {
 async function runPost(env: Env, post: Post): Promise<Post> {
   post.status = "posting";
   await env.R2_BUCKET.put(postKey(post.id), JSON.stringify(post));
-  try { post.result = await publish(env, post); post.status = "posted"; }
+  try { post.result = await publish(env, post); post.status = "posted"; post.posted_at = new Date().toISOString(); }
   catch (e) { post.status = "failed"; post.error = (e as Error).message.slice(0, 300); }
   await env.R2_BUCKET.put(postKey(post.id), JSON.stringify(post));
   return post;
@@ -256,7 +260,7 @@ export async function createPosts(req: Request, env: Env, caller: Caller, clipId
       id, tenant_id: caller.tenantId, clip_id: clipId, media_key: mediaKey(id), platform,
       title: String(b.title ?? "").slice(0, 100) || "New clip", caption: String(b.caption ?? "").slice(0, 2000),
       privacy: (["public", "unlisted", "private"].includes(String(b.privacy)) ? b.privacy : "public") as Post["privacy"],
-      scheduled_for: when.toISOString(), status: "scheduled", created_at: new Date().toISOString(),
+      scheduled_for: when.toISOString(), status: "scheduled", created_at: new Date().toISOString(), user_id: caller.userId,
     };
     await env.R2_BUCKET.put(postKey(id), JSON.stringify(post));
     out.push(post);
@@ -287,6 +291,47 @@ export async function runDuePosts(env: Env): Promise<void> {
     if (p.status === "scheduled" && due <= Date.now()) await runPost(env, p);
     else if (p.status !== "scheduled" && due < Date.now() - 7 * 86_400_000) {
       await env.R2_BUCKET.delete([o.key, p.media_key]);
+    }
+  }
+}
+
+/**
+ * AUTOMATIC RESULTS — ~48 h after a clip goes up on YouTube, fetch its views
+ * (YouTube Data API, with the user's own connection) and turn them into the
+ * same "did well" / "flopped" signal the editor's buttons give, judged
+ * against that workspace's OTHER posted clips (a 300-view channel and a
+ * 300k one are each judged against themselves). Measured once per post.
+ */
+export async function measurePosts(env: Env): Promise<void> {
+  const listed = await env.R2_BUCKET.list({ prefix: "_clipper/posts/", limit: 1000 });
+  const all: Post[] = [];
+  for (const o of listed.objects) {
+    const p = (await (await env.R2_BUCKET.get(o.key))?.json().catch(() => null)) as Post | null;
+    if (p) all.push(p);
+  }
+  const due = all.filter((p) => p.platform === "youtube" && p.status === "posted" && !p.measured_at && p.posted_at
+    && Date.now() - new Date(p.posted_at).getTime() > 48 * 3600_000 && /youtube\.com\/shorts\/[\w-]+/.test(p.result ?? ""));
+  for (const p of due.slice(0, 50)) {
+    try {
+      const conn = await token(env, p.tenant_id, "youtube");
+      const id = (p.result ?? "").split("/shorts/")[1];
+      const j = await (await fetch(`https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${conn.access_token}` } })).json() as any;
+      const views = Number(j.items?.[0]?.statistics?.viewCount);
+      if (!Number.isFinite(views)) continue;
+      // Baseline: this workspace's other measured posts (median); until there
+      // are 3, fixed bars stand in.
+      const peers = all.filter((x) => x.tenant_id === p.tenant_id && x.id !== p.id && typeof x.views === "number").map((x) => x.views!).sort((a, b) => a - b);
+      const median = peers.length >= 3 ? peers[Math.floor(peers.length / 2)] : null;
+      const verdict: Post["verdict"] = median != null
+        ? (views >= median * 1.5 ? "good" : views <= median * 0.5 ? "flopped" : "neutral")
+        : (views >= 5000 ? "good" : views < 300 ? "flopped" : "neutral");
+      p.views = views; p.measured_at = new Date().toISOString(); p.verdict = verdict;
+      await env.R2_BUCKET.put(postKey(p.id), JSON.stringify(p));
+      if (verdict !== "neutral" && p.user_id) {
+        await dbInsert(env, "feedback", { clip_id: p.clip_id, user_id: p.user_id, signal: verdict, payload: { views, source: "youtube", median } }).catch(() => {});
+      }
+    } catch (e) {
+      console.error(`[clipper measure] ${p.id}: ${String(e).slice(0, 200)}`);
     }
   }
 }
