@@ -18,6 +18,7 @@ import passwordChanged from "./email-templates/password-changed.html";
 import clipsReady from "./email-templates/clips-ready.html";
 import adminAlert from "./email-templates/admin-alert.html";
 import adminDaily from "./email-templates/admin-daily.html";
+import teamInvite from "./email-templates/team-invite.html";
 
 export const TEMPLATES = {
   "confirm-signup": confirmSignup,
@@ -27,6 +28,7 @@ export const TEMPLATES = {
   "clips-ready": clipsReady,
   "admin-alert": adminAlert,
   "admin-daily": adminDaily,
+  "team-invite": teamInvite,
 } as const;
 export type TemplateName = keyof typeof TEMPLATES;
 

@@ -11,6 +11,8 @@ import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
 import * as admin from "./admin";
 import * as social from "./social";
+import * as team from "./team";
+import { myReferral } from "./referrals";
 import { checkProjectRate, clientErrors, reportClientError } from "./guards";
 import { getBrand, loadBrand, putBrand } from "./brand";
 import { passwordChanged, recover, resend, signup } from "./accounts";
@@ -90,6 +92,14 @@ const ROUTES: [string, RegExp, Handler][] = [
   ["GET", /^\/v1\/connect\/(youtube|tiktok|instagram)\/callback$/, async (r, env, _ctx, p) => social.connectCallback(r, env, p[0])],
   ["POST", new RegExp(`^/v1/clips/${UUID}/posts$`), authed(async (r, env, c, p, ctx) => social.createPosts(r, env, c, p[0], ctx))],
   ["GET", new RegExp(`^/v1/clips/${UUID}/posts$`), authed(async (_r, env, c, p) => social.listPosts(env, c, p[0]))],
+
+  // Team workspaces (team.ts) and referrals (referrals.ts)
+  ["GET", /^\/v1\/team$/, authed(async (_r, env, c) => team.getTeam(env, c))],
+  ["POST", /^\/v1\/team\/invites$/, authed(async (r, env, c) => team.invite(r, env, c))],
+  ["DELETE", /^\/v1\/team\/invites\/([^/]+)$/, authed(async (_r, env, c, p) => team.cancelInvite(env, c, p[0]))],
+  ["POST", /^\/v1\/team\/accept$/, authed(async (r, env, c) => team.accept(r, env, c))],
+  ["DELETE", new RegExp(`^/v1/team/members/${UUID}$`), authed(async (_r, env, c, p) => team.removeMember(env, c, p[0]))],
+  ["GET", /^\/v1\/referral$/, authed(async (_r, env, c) => myReferral(env, c))],
 
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],

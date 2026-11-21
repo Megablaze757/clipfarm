@@ -4,6 +4,7 @@ import { ApiError, safeEqual } from "./http";
 import { planFor, type Plan } from "./plans";
 import { verifyGithubRunner } from "./github-oidc";
 import { guestModeOn } from "./settings";
+import { bonusMinutes } from "./referrals";
 
 export interface Caller {
   /** "" for a guest — never write it to a column that references auth.users. */
@@ -97,10 +98,16 @@ export async function requireCaller(req: Request, env: Env): Promise<Caller> {
     email: user.email ?? "",
     tenantId: profile.tenant_id,
     role: profile.role,
-    plan: planFor(admin ? "enterprise" : tenant?.plan),
+    plan: await withBonus(env, profile.tenant_id, planFor(admin ? "enterprise" : tenant?.plan)),
     guest: false,
     admin,
   };
+}
+
+/** Referral bonus minutes add to the monthly allowance (referrals.ts). */
+async function withBonus(env: Env, tenantId: string, plan: Plan): Promise<Plan> {
+  const bonus = await bonusMinutes(env, tenantId).catch(() => 0);
+  return bonus ? { ...plan, monthlyMinutes: plan.monthlyMinutes + bonus } : plan;
 }
 
 export function requireEditor(caller: Caller) {

@@ -4,6 +4,7 @@ import { GUEST_TENANT } from "./plans";
 import { sendTemplate } from "./accounts";
 import { overviewData } from "./admin";
 import { getSettings, updateSettings } from "./settings";
+import { rewardOnFirstProject } from "./referrals";
 
 /**
  * Emails that go out on their own, from the 10-minute cron:
@@ -40,6 +41,7 @@ export async function sendNotifications(env: Env): Promise<void> {
     try {
       const [owner] = await dbJson<{ email: string }[]>(env, `profiles?tenant_id=eq.${p.tenant_id}&role=eq.owner&select=email&limit=1`);
       if (!owner?.email) continue;
+      await rewardOnFirstProject(env, p.tenant_id, owner.email).catch((e) => console.error(`[referral] ${String(e)}`));
       const top = await dbJson<{ t_in_ms: number; t_out_ms: number; score: number; features: { context_title?: string; title?: string } }[]>(env,
         `candidates?project_id=eq.${p.id}&select=t_in_ms,t_out_ms,score,features&order=score.desc&limit=3`);
       if (!top.length) continue;

@@ -5,6 +5,7 @@ import { planFor, planForTenant, PRESETS } from "./plans";
 import { loadBrand, tastes } from "./brand";
 import { getSettings } from "./settings";
 import { LANGUAGES, translateCaptions } from "./translate";
+import { bonusMinutes } from "./referrals";
 
 export const IN_FLIGHT = ["transcoding", "transcribing", "analyzing", "candidates", "scoring"];
 
@@ -65,7 +66,7 @@ export async function processPayload(env: Env, project: ProjectRow) {
       id: plan.id,
       clipsPerSource: plan.clipsPerSource,
       maxSourceMinutes: plan.maxSourceMinutes,
-      remainingMinutes: Math.max(0, plan.monthlyMinutes - used),
+      remainingMinutes: Math.max(0, plan.monthlyMinutes + (await bonusMinutes(env, project.tenant_id).catch(() => 0)) - used),
     },
   };
 }

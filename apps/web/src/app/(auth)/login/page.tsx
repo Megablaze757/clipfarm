@@ -93,7 +93,7 @@ function LoginForm() {
         }
       } else {
         if (password.length < 8) throw new Error('Passwords need at least 8 characters.')
-        const r = await viaWorker('/v1/auth/signup', { email, password })
+        const r = await viaWorker('/v1/auth/signup', { email, password, ...(params.get('ref') ? { ref: params.get('ref')! } : {}) })
         if (r.ok && r.data?.exists) { setInfo(r.data.message); setMode('sign_in'); return }
         if (r.ok) { setInfo('Check your email to confirm your account — the link signs you straight in.'); setAwaitingConfirm(true); setCooldown(60); return }
         throw new Error(workerError(r.data) ?? "We couldn't create your account just now — try again in a minute.")

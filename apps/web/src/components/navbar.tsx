@@ -27,6 +27,7 @@ export function Navbar() {
         <nav className="flex items-center space-x-1 bg-slate-900/80 border border-slate-800 p-1 rounded-xl text-xs font-medium text-slate-300">
           <Link href="/projects" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Projects</Link>
           <Link href="/settings/brand" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Brand</Link>
+          <Link href="/settings/team" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Team</Link>
           <Link href="/settings/billing" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Billing</Link>
           {me?.is_admin && <Link href="/admin" className="px-3 py-1.5 rounded-lg text-amber-200 hover:text-white hover:bg-slate-800 transition-colors">Admin</Link>}
         </nav>

@@ -2,6 +2,7 @@ import { appUrl, type Env } from "./env";
 import { ApiError, body, json } from "./http";
 import { renderEmail, type TemplateName } from "./email-templates";
 import type { Caller } from "./auth";
+import { notePendingReferral } from "./referrals";
 
 /**
  * Clipper's own account emails.
@@ -102,7 +103,7 @@ async function deliver(env: Env, to: string, subject: string, mail: { html: stri
 
 /** POST /v1/auth/signup {email, password} — creates the account and sends a Clipper confirmation email. */
 export async function signup(req: Request, env: Env): Promise<Response> {
-  const { email, password } = await body<{ email?: string; password?: string }>(req);
+  const { email, password, ref } = await body<{ email?: string; password?: string; ref?: string }>(req);
   if (!emailOk(email)) throw new ApiError(400, "E_VALIDATION", "enter a valid email address");
   if (typeof password !== "string" || password.length < 8) throw new ApiError(400, "E_VALIDATION", "passwords need at least 8 characters");
   if (await throttled(env, "signup", email)) throw new ApiError(429, "E_RATE_LIMITED", "wait a minute before trying again");
@@ -115,6 +116,7 @@ export async function signup(req: Request, env: Env): Promise<Response> {
   }
   const url = `${appUrl(env)}/login?token_hash=${encodeURIComponent(link.hashed_token)}&type=signup`;
   await sendTemplate(env, "confirm-signup", email.trim(), { link: url });
+  await notePendingReferral(env, email.trim(), ref).catch(() => {});
   return json({ sent: true });
 }
 
