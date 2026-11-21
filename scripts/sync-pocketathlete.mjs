@@ -37,7 +37,7 @@ for (const file of readdirSync(srcDir).filter((f) => f.endsWith(".ts"))) {
 // --- Added by clipfarm/scripts/sync-pocketathlete.mjs -----------------------
 // Clipper (apps/worker/src/clipper) borrows the same AI ladder, so both apps
 // share one set of keys and one Groq -> OpenRouter -> NVIDIA fallback chain.
-export { complete as completeWithFallbacks, modelChain };
+export { complete as completeWithFallbacks, modelChain, email as sendEmail };
 `;
   }
   writeFileSync(join(outDir, file), text);

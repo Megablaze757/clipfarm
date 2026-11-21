@@ -1,8 +1,9 @@
-import { appUrl, stripeKey, type Env } from "./env";
+import { apiUrl, appUrl, stripeKey, type Env } from "./env";
 import type { Caller } from "./auth";
 import { dbJson, dbOne, dbPatch } from "./db";
 import { ApiError, body, json } from "./http";
-import { planForPrice, priceFor, type Plan } from "./plans";
+import { PLANS, type Plan } from "./plans";
+import { planForStripePrice, stripePrice, stripeWebhookSecret, updateSettings, getSettings } from "./settings";
 
 /**
  * Stripe for Clipper (§15). Everything Clipper puts on a Stripe object is
@@ -41,14 +42,14 @@ export async function checkout(req: Request, env: Env, caller: Caller): Promise<
   if (caller.guest) throw new ApiError(401, "E_UNAUTHORIZED", "sign in to upgrade — guest mode is for testing");
   if (caller.role !== "owner") throw new ApiError(403, "E_FORBIDDEN", "only the workspace owner can change the plan");
   const { plan } = await body<{ plan?: Plan["id"] }>(req);
-  const price = plan ? priceFor(env, plan) : undefined;
-  if (!plan || !price) throw new ApiError(400, "E_VALIDATION", `no Stripe price is configured for "${plan}" — set CLIPPER_PRICE_${String(plan).toUpperCase()}`);
+  const price = plan ? await stripePrice(env, plan) : undefined;
+  if (!plan || !price) throw new ApiError(400, "E_VALIDATION", `payments aren't set up for the "${plan}" plan yet — an admin can do it in Admin → Payments`);
   const live = await dbOne<{ id: string }>(env,
     `subscriptions?tenant_id=eq.${caller.tenantId}&status=in.(active,trialing,past_due)&select=id`);
   if (live) throw new ApiError(409, "E_ALREADY_SUBSCRIBED", "this workspace already has a subscription — change it from the billing portal");
 
   const customer = await customerFor(env, caller);
-  const app = (env.CLIPPER_APP_URL || "").replace(/\/$/, "");
+  const app = appUrl(env);
   const params: Record<string, string> = {
     mode: "subscription",
     customer,
@@ -74,7 +75,7 @@ export async function portal(env: Env, caller: Caller): Promise<Response> {
   if (caller.guest) throw new ApiError(401, "E_UNAUTHORIZED", "sign in to manage billing");
   const tenant = await dbOne<{ stripe_customer_id: string | null }>(env, `tenants?id=eq.${caller.tenantId}&select=stripe_customer_id`);
   if (!tenant?.stripe_customer_id) throw new ApiError(404, "E_NO_BILLING_ACCOUNT", "no billing account yet — upgrade first");
-  const app = (env.CLIPPER_APP_URL || "").replace(/\/$/, "");
+  const app = appUrl(env);
   const session = await stripe<{ url: string }>(env, "billing_portal/sessions", {
     customer: tenant.stripe_customer_id,
     return_url: `${app}/settings/billing?billing=return`,
@@ -102,12 +103,11 @@ async function verifyStripe(payload: string, header: string, secret: string): Pr
 }
 
 export async function webhook(req: Request, env: Env): Promise<Response> {
-  if (!env.CLIPPER_STRIPE_WEBHOOK_SECRET) {
-    return json({ error: "CLIPPER_STRIPE_WEBHOOK_SECRET is not set on the Worker" }, 503);
-  }
+  const secret = await stripeWebhookSecret(env);
+  if (!secret) return json({ error: "payments aren't set up yet (Admin → Payments)" }, 503);
   const payload = await req.text();
   const sig = req.headers.get("stripe-signature") ?? "";
-  if (!(await verifyStripe(payload, sig, env.CLIPPER_STRIPE_WEBHOOK_SECRET))) return new Response("bad signature", { status: 400 });
+  if (!(await verifyStripe(payload, sig, secret))) return new Response("bad signature", { status: 400 });
   const event = JSON.parse(payload) as { id: string; type: string; data: { object: any } };
   const obj = event.data.object;
   try {
@@ -128,7 +128,7 @@ async function upsertSubscription(env: Env, sub: any): Promise<void> {
   const tenantId = sub.metadata?.tenant_id;
   if (!tenantId) return;
   const item = (sub.items?.data ?? []).find((i: any) => i.price?.recurring?.usage_type !== "metered") ?? sub.items?.data?.[0];
-  const plan = planForPrice(env, item?.price?.id) ?? sub.metadata?.plan ?? "creator";
+  const plan = (await planForStripePrice(env, item?.price?.id)) ?? sub.metadata?.plan ?? "creator";
   const active = ["active", "trialing", "past_due"].includes(sub.status);
   const periodEnd = sub.current_period_end ?? item?.current_period_end;
   await dbJson(env, "subscriptions?on_conflict=stripe_subscription_id", {
@@ -182,4 +182,70 @@ export async function reportUsage(env: Env): Promise<void> {
     }
     await dbPatch(env, `usage_events?id=eq.${ev.id}`, { stripe_meter_event_id: marker });
   }
+}
+
+// --- One-click setup (Admin → Payments) --------------------------------------
+
+/**
+ * Creates Clipper's product and one monthly price per paid plan in the Stripe
+ * account the Worker already holds a key for, plus the webhook endpoint that
+ * keeps plans in sync — and stores the IDs and webhook secret in the Worker's
+ * settings. Safe to run again: existing prices/webhook are reused.
+ */
+export async function setupStripe(env: Env): Promise<Record<string, unknown>> {
+  const key = stripeKey(env);
+  if (!key) throw new ApiError(503, "E_NOT_CONFIGURED", "no Stripe secret key on the Worker (STRIPE_SECRET_KEY)");
+  const mode = key.startsWith("sk_live") || key.startsWith("rk_live") ? "live" : "test";
+  const current = (await getSettings(env)).stripe ?? {};
+  let productId = current.product_id;
+  if (!productId) {
+    const product = await stripe<{ id: string }>(env, "products", {
+      name: "Clipper", description: "Long videos and streams into viral short clips", "metadata[app]": "clipper",
+    });
+    productId = product.id;
+  }
+  const prices = { ...(current.prices ?? {}) };
+  for (const id of ["creator", "team", "agency"] as const) {
+    if (prices[id]) continue;
+    const plan = PLANS[id];
+    if (!plan.priceUsd) continue;
+    const price = await stripe<{ id: string }>(env, "prices", {
+      product: productId, currency: "usd", unit_amount: String(Math.round(plan.priceUsd * 100)),
+      "recurring[interval]": "month", nickname: `Clipper ${plan.label}`,
+      "metadata[app]": "clipper", "metadata[plan]": id, lookup_key: `clipper_${id}_monthly`,
+    });
+    prices[id] = price.id;
+  }
+  let webhookId = current.webhook_id, webhookSecret = current.webhook_secret;
+  if (!webhookId || !webhookSecret) {
+    const wh = await stripe<{ id: string; secret: string }>(env, "webhook_endpoints", {
+      url: `${apiUrl(env)}/v1/webhooks/stripe`,
+      description: "Clipper subscriptions",
+      "enabled_events[0]": "checkout.session.completed",
+      "enabled_events[1]": "customer.subscription.created",
+      "enabled_events[2]": "customer.subscription.updated",
+      "enabled_events[3]": "customer.subscription.deleted",
+      "metadata[app]": "clipper",
+    });
+    webhookId = wh.id; webhookSecret = wh.secret;
+  }
+  await updateSettings(env, (s) => ({
+    ...s,
+    stripe: { mode, product_id: productId, prices, webhook_id: webhookId, webhook_secret: webhookSecret, set_up_at: new Date().toISOString() },
+  }));
+  return { mode, product_id: productId, prices, webhook_id: webhookId };
+}
+
+/** Clipper's subscriptions as Stripe sees them (for the admin Money tab). */
+export async function stripeOverview(env: Env): Promise<Record<string, unknown>> {
+  const key = stripeKey(env);
+  const s = (await getSettings(env)).stripe ?? {};
+  return {
+    key_present: !!key,
+    mode: key ? (key.startsWith("sk_live") || key.startsWith("rk_live") ? "live" : "test") : null,
+    set_up: !!(s.prices?.creator && s.webhook_secret) || !!(env.CLIPPER_PRICE_CREATOR && env.CLIPPER_STRIPE_WEBHOOK_SECRET),
+    prices: { creator: await stripePrice(env, "creator") ?? null, team: await stripePrice(env, "team") ?? null, agency: await stripePrice(env, "agency") ?? null },
+    webhook_id: s.webhook_id ?? null,
+    set_up_at: s.set_up_at ?? null,
+  };
 }

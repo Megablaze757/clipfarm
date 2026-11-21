@@ -9,6 +9,8 @@ import { internalComplete, internalDb, internalJob, internalTranscribe } from ".
 import { clipWords, dispatchProject, dispatchRender, minutesUsed, runnerMode, IN_FLIGHT, type ClipEdits, type ProjectRow } from "./jobs";
 import { PLANS, PRESETS } from "./plans";
 import { checkBackground, listBackgrounds, uploadBackground, uploadChat } from "./backgrounds";
+import * as admin from "./admin";
+import { recover, resend, signup } from "./accounts";
 import { modelChain } from "../pocketathlete/index";
 
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, params: string[]) => Promise<Response>;
@@ -58,11 +60,27 @@ const ROUTES: [string, RegExp, Handler][] = [
   // Live-chat logs for chat analysis
   ["PUT", /^\/v1\/chat$/, authed(async (r, env, c) => uploadChat(r, env, c))],
 
+  // Accounts — Clipper-branded confirmation / reset emails (accounts.ts)
+  ["POST", /^\/v1\/auth\/signup$/, async (r, env) => signup(r, env)],
+  ["POST", /^\/v1\/auth\/recover$/, async (r, env) => recover(r, env)],
+  ["POST", /^\/v1\/auth\/resend$/, async (r, env) => resend(r, env)],
+
+  // Admin panel (admin.ts) — every route checks the admin role on the Worker
+  ["GET", /^\/v1\/admin\/overview$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.overview(env); })],
+  ["GET", /^\/v1\/admin\/users$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.users(r, env); })],
+  ["POST", new RegExp(`^/v1/admin/workspaces/${UUID}/plan$`), authed(async (r, env, c, p) => { admin.requireAdmin(c); return admin.setPlan(r, env, p[0]); })],
+  ["GET", /^\/v1\/admin\/jobs$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.jobs(env); })],
+  ["POST", new RegExp(`^/v1/admin/projects/${UUID}/retry$`), authed(async (_r, env, c, p, ctx) => { admin.requireAdmin(c); return admin.retry(env, ctx, p[0]); })],
+  ["GET", /^\/v1\/admin\/payments$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.payments(env); })],
+  ["POST", /^\/v1\/admin\/payments\/setup$/, authed(async (_r, env, c) => { admin.requireAdmin(c); return admin.paymentsSetup(env); })],
+  ["GET", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
+  ["PATCH", /^\/v1\/admin\/settings$/, authed(async (r, env, c) => { admin.requireAdmin(c); return admin.settings(r, env); })],
+
   // Brand kits, usage, billing
   ["GET", /^\/v1\/brandkits$/, authed(async (_r, env, c) => json({ brandkits: await dbJson(env, `brandkits?tenant_id=eq.${c.tenantId}&select=*&order=created_at.desc`) }))],
   ["POST", /^\/v1\/brandkits$/, authed(createBrandkit)],
   ["GET", /^\/v1\/usage$/, authed(getUsage)],
-  ["GET", /^\/v1\/me$/, authed(async (_r, _env, c) => json({ user_id: c.userId, email: c.email, tenant_id: c.tenantId, role: c.role, plan: c.plan }))],
+  ["GET", /^\/v1\/me$/, authed(async (_r, _env, c) => json({ user_id: c.userId, email: c.email, tenant_id: c.tenantId, role: c.role, plan: c.plan, is_admin: c.admin, guest: c.guest }))],
   ["POST", /^\/v1\/billing\/checkout$/, authed(async (r, env, c) => checkout(r, env, c))],
   ["POST", /^\/v1\/billing\/portal$/, authed(async (_r, env, c) => portal(env, c))],
   ["POST", /^\/v1\/webhooks\/stripe$/, async (r, env) => webhook(r, env)],

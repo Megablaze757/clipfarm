@@ -1,8 +1,9 @@
 import { internalSecret, type Env } from "./env";
-import { dbJson, dbOne, rpc } from "./db";
+import { dbJson, dbOne, dbPatch, rpc } from "./db";
 import { ApiError, safeEqual } from "./http";
 import { planFor, type Plan } from "./plans";
 import { verifyGithubRunner } from "./github-oidc";
+import { guestModeOn } from "./settings";
 
 export interface Caller {
   /** "" for a guest — never write it to a column that references auth.users. */
@@ -12,6 +13,32 @@ export interface Caller {
   role: "owner" | "editor" | "viewer";
   plan: Plan;
   guest: boolean;
+  /** Platform admin (see isAdminUser) — the admin panel, any workspace, unlimited plan. */
+  admin: boolean;
+}
+
+/**
+ * WHO IS AN ADMIN — decided here, on the Worker, from the verified session;
+ * the web app only hides or shows the panel. Same model as FootballFitnessGuru
+ * (role = 'admin' on the account), and the two apps share accounts:
+ *   - an admin on PocketAthlete (public.profiles.role = 'admin'), or
+ *   - an address in CLIPPER_ADMIN_EMAILS (a Worker secret, comma-separated).
+ * Either way the email must be CONFIRMED, so nobody can sign up with an
+ * admin's address and get in before proving they own it.
+ */
+export async function isAdminUser(env: Env, user: { id: string; email?: string; email_confirmed_at?: string | null }): Promise<boolean> {
+  if (!user.email_confirmed_at || !user.email) return false;
+  const listed = (env.CLIPPER_ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (listed.includes(user.email.toLowerCase())) return true;
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role`, {
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    const rows = r.ok ? ((await r.json()) as { role?: string }[]) : [];
+    return rows[0]?.role === "admin";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -33,23 +60,22 @@ async function guestCaller(env: Env): Promise<Caller> {
     });
     guestReady = true;
   }
-  return { userId: "", email: "", tenantId: GUEST_TENANT, role: "owner", plan: guestPlan(), guest: true };
+  return { userId: "", email: "", tenantId: GUEST_TENANT, role: "owner", plan: guestPlan(), guest: true, admin: false };
 }
 
-const guestAllowed = (env: Env) => (env.CLIPPER_GUEST_MODE ?? "on").trim().toLowerCase() !== "off";
 
 /** Verifies the Supabase JWT (the same accounts as PocketAthlete) and loads the Clipper workspace. */
 export async function requireCaller(req: Request, env: Env): Promise<Caller> {
   const auth = req.headers.get("Authorization") ?? "";
   if (!/^Bearer\s+\S+/i.test(auth)) {
-    if (guestAllowed(env)) return guestCaller(env);
+    if (await guestModeOn(env)) return guestCaller(env);
     throw new ApiError(401, "E_UNAUTHORIZED", "sign in first");
   }
   const r = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: auth, apikey: env.SUPABASE_ANON_KEY },
   });
   if (!r.ok) throw new ApiError(401, "E_UNAUTHORIZED", "session expired — sign in again");
-  const user = (await r.json()) as { id?: string; email?: string };
+  const user = (await r.json()) as { id?: string; email?: string; email_confirmed_at?: string | null };
   if (!user?.id) throw new ApiError(401, "E_UNAUTHORIZED", "session expired — sign in again");
 
   let profile = await dbOne<{ tenant_id: string; role: Caller["role"] }>(
@@ -62,13 +88,18 @@ export async function requireCaller(req: Request, env: Env): Promise<Caller> {
     if (!profile) throw new ApiError(500, "E_NO_TENANT", "could not create a workspace for this account");
   }
   const tenant = await dbOne<{ plan: string }>(env, `tenants?id=eq.${profile.tenant_id}&select=plan`);
+  const admin = await isAdminUser(env, { id: user.id, email: user.email, email_confirmed_at: user.email_confirmed_at });
+  // An admin's own workspace runs on the unlimited internal plan — set on the
+  // tenant row too, so the processing runner gets the same limits.
+  if (admin && tenant?.plan !== "enterprise") await dbPatch(env, `tenants?id=eq.${profile.tenant_id}`, { plan: "enterprise" }).catch(() => {});
   return {
     userId: user.id,
     email: user.email ?? "",
     tenantId: profile.tenant_id,
     role: profile.role,
-    plan: planFor(tenant?.plan),
+    plan: planFor(admin ? "enterprise" : tenant?.plan),
     guest: false,
+    admin,
   };
 }
 

@@ -17,7 +17,7 @@ export const PLANS: Record<Plan["id"], Plan> = {
   creator:    { id: "creator",    label: "Creator",    monthlyMinutes: 600,    concurrentJobs: 3,  clipsPerSource: null, watermark: false, maxSourceMinutes: 360, priceUsd: 19 },
   team:       { id: "team",       label: "Team",       monthlyMinutes: 3000,   concurrentJobs: 10, clipsPerSource: null, watermark: false, maxSourceMinutes: 360, priceUsd: 49 },
   agency:     { id: "agency",     label: "Agency",     monthlyMinutes: 15000,  concurrentJobs: 40, clipsPerSource: null, watermark: false, maxSourceMinutes: 360, priceUsd: 149 },
-  enterprise: { id: "enterprise", label: "Enterprise", monthlyMinutes: 100000, concurrentJobs: 40, clipsPerSource: null, watermark: false, maxSourceMinutes: 600, priceUsd: null },
+  enterprise: { id: "enterprise", label: "Enterprise", monthlyMinutes: 1000000, concurrentJobs: 40, clipsPerSource: null, watermark: false, maxSourceMinutes: 48 * 60, priceUsd: null },
 };
 
 export function planFor(id: string | null | undefined): Plan {

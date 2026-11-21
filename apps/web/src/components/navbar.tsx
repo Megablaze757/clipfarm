@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useSession } from './use-session'
+import { useMe } from './use-me'
 
 export function Navbar() {
   const session = useSession()
+  const me = useMe()
   const router = useRouter()
   return (
     <header className="sticky top-0 z-50 glass-panel border-b border-white/10 px-4 sm:px-6 py-3.5">
@@ -25,12 +27,13 @@ export function Navbar() {
         <nav className="flex items-center space-x-1 bg-slate-900/80 border border-slate-800 p-1 rounded-xl text-xs font-medium text-slate-300">
           <Link href="/projects" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Projects</Link>
           <Link href="/settings/billing" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-slate-800 transition-colors">Billing</Link>
+          {me?.is_admin && <Link href="/admin" className="px-3 py-1.5 rounded-lg text-amber-200 hover:text-white hover:bg-slate-800 transition-colors">Admin</Link>}
         </nav>
 
         <div className="flex items-center space-x-3">
           {session ? (
             <>
-              <span className="hidden md:inline text-[11px] text-slate-400 truncate max-w-[180px]">{session.user.email}</span>
+              <Link href="/settings/account" className="hidden md:inline text-[11px] text-slate-400 hover:text-slate-200 truncate max-w-[180px]" title="Account">{session.user.email}</Link>
               <button
                 onClick={async () => { await supabase.auth.signOut(); router.push('/') }}
                 className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700 text-slate-300 hover:bg-slate-800"

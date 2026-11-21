@@ -19,6 +19,8 @@ export interface Env extends PocketAthleteEnv {
   CLIPPER_GITHUB_REPO?: string;
   /** "off" requires sign-in. Anything else (default): no sign-in = shared Guest workspace. */
   CLIPPER_GUEST_MODE?: string;
+  /** Comma-separated admin emails (a Worker SECRET, so addresses stay out of the repo). */
+  CLIPPER_ADMIN_EMAILS?: string;
 
   /**
    * Optional. Signs media URLs and authenticates the Container's calls back.
