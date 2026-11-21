@@ -372,7 +372,11 @@ async function getClip(_r: Request, env: Env, caller: Caller, p: string[]): Prom
     candidate: cand ? { ...cand, proxy_url: await signedUrl(env, cand.proxy_uri), edit_url: await signedUrl(env, cand.features?.edit_key) } : null,
     project: project ? await decorate(env, project) : null,
     words,
-    renders: await Promise.all(renders.map(async (r) => ({ ...r, download_url: r.status === "completed" ? await signedUrl(env, r.uri, 24 * 3600, `${(clip.title || "clip").slice(0, 40)}.mp4`) : null }))),
+    renders: await Promise.all(renders.map(async (r) => ({
+      ...r,
+      download_url: r.status === "completed" ? await signedUrl(env, r.uri, 24 * 3600, `${(clip.title || "clip").slice(0, 40)}.mp4`) : null,
+      cover_url: r.status === "completed" && r.uri ? await signedUrl(env, String(r.uri).replace(/\.mp4$/, ".jpg"), 24 * 3600, `${(clip.title || "clip").slice(0, 40)}-cover.jpg`) : null,
+    }))),
     plan: caller.plan,
   });
 }
@@ -428,7 +432,11 @@ async function renderClip(req: Request, env: Env, caller: Caller, p: string[], c
 async function getRender(_r: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
   const job = await dbOne<Record<string, any>>(env, `render_jobs?id=eq.${requireUuid(p[0], "render")}&tenant_id=eq.${caller.tenantId}&select=id,clip_id,preset,status,uri,error_code,error_detail,queued_at,finished_at`);
   if (!job) throw new ApiError(404, "E_NOT_FOUND", "render not found");
-  return json({ ...job, download_url: job.status === "completed" ? await signedUrl(env, job.uri, 24 * 3600, "clip.mp4") : null });
+  return json({
+    ...job,
+    download_url: job.status === "completed" ? await signedUrl(env, job.uri, 24 * 3600, "clip.mp4") : null,
+    cover_url: job.status === "completed" && job.uri ? await signedUrl(env, String(job.uri).replace(/\.mp4$/, ".jpg"), 24 * 3600, "cover.jpg") : null,
+  });
 }
 
 async function createBrandkit(req: Request, env: Env, caller: Caller): Promise<Response> {

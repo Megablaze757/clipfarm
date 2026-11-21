@@ -65,6 +65,8 @@ export interface Candidate {
     hook_line?: string;
     /** On-screen headline for the whole clip: who + what ("KAI CENAT CRASHES OUT AT …"). */
     context_title?: string;
+    /** Up to 3 headline choices (the first is context_title) — picked in the editor. */
+    headline_options?: string[];
     /** Found by the whole-transcript nomination pass (moments.ts). */
     nominated?: boolean;
     /** Multiplier on the composite (e.g. 0.85 = not reviewed by the AI judge). */

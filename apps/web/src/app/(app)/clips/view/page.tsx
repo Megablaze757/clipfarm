@@ -13,7 +13,7 @@ import { wrapHeadline } from '@/lib/headline'
 import { CAPTION_LOOKS, isPowerWord, lookFor } from '@/lib/captions'
 
 interface Word { i: number; w: string; t0: number; t1: number; speaker?: string }
-interface Render { id: string; preset: string; status: string; download_url: string | null; error_code?: string | null }
+interface Render { id: string; preset: string; status: string; download_url: string | null; cover_url?: string | null; error_code?: string | null }
 interface ClipResponse {
   clip: { id: string; title: string | null; t_in_ms: number; t_out_ms: number; status: string; edits: any }
   candidate: { id: string; score: number; rationale: string | null; features: any; edit_url?: string | null } | null
@@ -477,11 +477,21 @@ function Studio() {
               <input value={state.overlay} maxLength={80} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />
               <span className="block mt-1 text-[10px] text-slate-500">
                 Who + what happens, so a stranger gets the context instantly.
-                {data.candidate?.features?.context_title && state.overlay !== data.candidate.features.context_title && (
-                  <> Suggested: <button type="button" onClick={() => update((s) => ({ ...s, overlay: data.candidate!.features.context_title }))} className="underline text-indigo-300">{data.candidate.features.context_title}</button></>
-                )}
                 {state.overlay && <> · <button type="button" onClick={() => update((s) => ({ ...s, overlay: '' }))} className="underline">remove</button></>}
               </span>
+              {(() => {
+                // The engine's headline options — pick one with a click.
+                const f = data.candidate?.features ?? {}
+                const opts: string[] = [...new Set<string>([...(f.headline_options ?? []), ...(f.context_title ? [f.context_title] : [])])].slice(0, 3)
+                return opts.length > 0 && (
+                  <span className="mt-2 flex flex-wrap gap-1.5">
+                    {opts.map((o) => (
+                      <button key={o} type="button" onClick={() => update((s) => ({ ...s, overlay: o }))}
+                        className={`px-2 py-1 rounded-md text-[10px] font-bold border ${state.overlay === o ? 'border-indigo-400 bg-indigo-500/20 text-white' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}>{o}</button>
+                    ))}
+                  </span>
+                )
+              })()}
             </label>
           </section>
 
@@ -542,7 +552,7 @@ function Studio() {
               {renders.map((r) => (
                 <li key={r.id} className="flex items-center justify-between text-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
                   <span className="text-slate-300">{r.preset}</span>
-                  {r.status === 'completed' && r.download_url ? <a href={r.download_url} className="text-emerald-300 font-semibold underline">Download</a>
+                  {r.status === 'completed' && r.download_url ? <span className="flex gap-3"><a href={r.download_url} className="text-emerald-300 font-semibold underline">Download</a>{r.cover_url && <a href={r.cover_url} className="text-slate-300 underline">Cover image</a>}</span>
                     : r.status === 'expired' ? <span className="text-slate-500">Deleted after 24 h — export again</span>
                     : r.status === 'failed' ? <span className="text-rose-300">Failed ({r.error_code})</span>
                     : <span className="text-slate-400 animate-pulse">Rendering…</span>}

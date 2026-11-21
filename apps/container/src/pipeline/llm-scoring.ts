@@ -32,15 +32,16 @@ Also return:
 - category: one of story, hot_take, surprising_fact, funny, practical_tip, emotional, debate, quotable, reveal
 - title: a scroll-stopping title, max 8 words, no hashtags/emojis, no clickbait the clip doesn't deliver
 - context_title: the HEADLINE burned on screen for the WHOLE clip — the context a stranger needs, the way viral clip pages write them. WHO (the real name: the streamer/channel from the source line, or a name said in the clip; else a role like "DOCTOR", "COMEDIAN", "STREAMER") + WHAT happens, present tense, 4-9 words, specific and vivid. Examples: "KAI CENAT CRASHES OUT AT FAST FOOD WORKER", "DOCTOR EXPLAINS WHY YOU WAKE UP AT 3AM", "STREAMER'S MOM WALKS IN MID-RANT". Don't give away the punchline word for word, don't invent names or events that aren't in the clip, no emojis/hashtags. If the source line names the channel/streamer, the clip is THEIR content: name them (as people know them — "KaiCenat" → "KAI CENAT"), never a generic "STREAMER"/"HOST"
+- alt_titles: TWO more headlines for the same clip, each a different angle (e.g. the reaction, the stakes, a question) — same rules as context_title
 - hook_line: the strongest opening line, copied from the excerpt
 - trim_start_words: how many words to cut from the START so the clip opens on its hook (0 if it already does; never cut needed context)
 - trim_end_words: how many words to cut from the END to drop a trailing ramble (0 if the ending is right)
 - rationale: why it will (or won't) perform, max 12 words
-Respond ONLY with JSON: {"clips":[{"id":number,"hook":n,"payoff":n,"emotion":n,"shareability":n,"self_contained":n,"complete":n,"category":"...","title":"...","context_title":"...","hook_line":"...","trim_start_words":n,"trim_end_words":n,"rationale":"..."}]}`;
+Respond ONLY with JSON: {"clips":[{"id":number,"hook":n,"payoff":n,"emotion":n,"shareability":n,"self_contained":n,"complete":n,"category":"...","title":"...","context_title":"...","alt_titles":["...","..."],"hook_line":"...","trim_start_words":n,"trim_end_words":n,"rationale":"..."}]}`;
 
 interface Judged {
   id: number; hook: number; payoff: number; emotion: number; shareability: number; self_contained: number; complete: number;
-  category?: string; title?: string; context_title?: string; hook_line?: string; trim_start_words?: number; trim_end_words?: number; rationale?: string;
+  category?: string; title?: string; context_title?: string; alt_titles?: string[]; hook_line?: string; trim_start_words?: number; trim_end_words?: number; rationale?: string;
 }
 
 /** 0-10 (or 0-1, or 0-100) → 0-1. */
@@ -124,6 +125,8 @@ export async function refineWithLLM(cands: Candidate[], words: Word[], batchSize
         if (typeof j.title === "string" && j.title.trim()) c.features.title = j.title.trim().slice(0, 80);
         if (typeof j.context_title === "string" && j.context_title.trim()) {
           c.features.context_title = cleanHeadline(j.context_title, source);
+          const alts = (Array.isArray(j.alt_titles) ? j.alt_titles : []).filter((t): t is string => typeof t === "string" && !!t.trim()).map((t) => cleanHeadline(t, source));
+          c.features.headline_options = [...new Set([c.features.context_title, ...alts])].slice(0, 3);
         }
         if (typeof j.hook_line === "string" && j.hook_line.trim()) c.features.hook_line = j.hook_line.trim().slice(0, 140);
         if (typeof j.category === "string" && j.category.trim()) c.features.category = j.category.trim().slice(0, 30);

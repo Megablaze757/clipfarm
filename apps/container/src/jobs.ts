@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { probe, StageError } from "./lib/proc";
+import { ffmpeg, probe, StageError } from "./lib/proc";
 import { db as supabase, ffAuthArgs, notifyNext, r2Delete, r2DownloadParallel, r2Upload, r2Url } from "./lib/worker";
 import type { Candidate } from "./lib/types";
 import { fetchSource } from "./pipeline/ingest";
@@ -407,6 +407,13 @@ export async function renderJob(job: RenderJob): Promise<void> {
     setBackgroundSource(r2Url); // uploaded split-screen footage is read straight from R2
     const { durationMs } = await renderFinal(r2Url(job.spec.mezzanine_key), job.spec, dir, out, await ffAuthArgs());
     await r2Upload(job.spec.output_key, out, "video/mp4");
+    // Cover image: a frame of the finished clip (headline and captions on it),
+    // for Shorts/Reels covers. Never fails the export.
+    try {
+      const cover = join(dir, "cover.jpg");
+      await ffmpeg(["-ss", String(Math.min(1.5, Math.max(0.2, durationMs / 3000))), "-i", out, "-frames:v", "1", "-q:v", "3", cover], 60_000);
+      await r2Upload(job.spec.output_key.replace(/\.mp4$/, ".jpg"), cover, "image/jpeg");
+    } catch (e) { console.warn(`cover: ${(e as Error).message.slice(0, 200)}`); }
     await supabase.from("render_jobs").update({
       status: "completed", uri: job.spec.output_key, duration_ms: durationMs,
       container_ms: Date.now() - t0, finished_at: new Date().toISOString(),
