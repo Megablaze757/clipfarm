@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ffmpeg, ffmpegFromStdin, probe } from "../lib/proc";
-import { GAME_H, GAME_HOOKS, GAME_W, GAMES, renderGame } from "./games";
+import { GAME_H, GAME_HOOKS, GAME_W, GAMES, renderGame, type Sfx } from "./games";
+import { synthSfx } from "./sfx";
 import { buildAss, type CapWord } from "./captions";
 
 /** Grid proxy (§7.1): 9:16 centre crop, 360×640, CRF 30 — ~15 % of a final's cost. */
@@ -21,7 +22,7 @@ export interface RenderSpec {
   captions: { mode: "burn" | "none"; style_id: string; words: { w: string; t0: number; t1: number }[] };
   overlays: { type: "title"; text: string; t_ms: [number, number] }[];
   /** Split screen: speaker on top, this footage below (absent/none = full frame). */
-  background?: { kind: "none" } | { kind: "builtin"; id: string } | { kind: "upload"; key: string };
+  background?: { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
   watermark: boolean;
   audio: { loudnorm: { target_lufs: number; tp: number } };
   encode: { crf: number; preset: string; fps: number };
@@ -114,15 +115,22 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const topH = bg ? Math.round(h / 4) * 2 : h;
   const bgArgs: string[] = [];
   const isGame = bg?.kind === "builtin" && !!GAMES[bg.id];
+  let gameSounds: { t: number; s: Sfx }[] = [];
+  let sfxFile: string | null = null;
   if (bg?.kind === "builtin" && isGame) {
     // Our own gameplay: simulate, pipe the frames into a quick lossless-ish encode.
     const gameFile = join(dir, "game.mp4"), gfps = Math.min(30, spec.encode.fps);
     await ffmpegFromStdin(
       ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${GAME_W}x${GAME_H}`, "-r", String(gfps), "-i", "pipe:0",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "14", "-pix_fmt", "yuv420p", gameFile],
-      (write) => renderGame(bg.id, hashOf(spec.trim.in_ms + bg.id), gfps, Math.ceil((durS + 0.5) * gfps), write),
+      async (write) => { gameSounds = await renderGame(bg.id, hashOf(spec.trim.in_ms + bg.id), gfps, Math.ceil((durS + 0.5) * gfps), write); },
     );
     bgArgs.push("-i", gameFile);
+    // The game's sounds, synthesized, mixed quietly under the speech below.
+    if (bg.sound !== false && gameSounds.length) {
+      sfxFile = join(dir, "game-sfx.wav");
+      await writeFile(sfxFile, synthSfx(gameSounds, durS, hashOf(bg.id + spec.trim.in_ms)));
+    }
   } else if (bg?.kind === "builtin") {
     bgArgs.push("-f", "lavfi", "-i", builtinBackground(bg.id, durS, spec.encode.fps));
   } else if (bg?.kind === "upload") {
@@ -229,7 +237,17 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
     videoOnly,
   ], 20 * 60 * 1000)]);
 
-  await ffmpeg([
+  await ffmpeg(sfxFile && info.hasAudio ? [
+    // Speech (loudness-normalised) + game sounds ~16 dB under it.
+    "-i", videoOnly,
+    "-ss", ss, ...inputArgs, "-i", mezzanine,
+    "-i", sfxFile,
+    "-t", durS.toFixed(3),
+    "-filter_complex", `[1:a:0]${af},aresample=48000[sp];[2:a]aresample=48000,volume=0.16[fx];[sp][fx]amix=inputs=2:duration=first:normalize=0[a]`,
+    "-map", "0:v:0", "-map", "[a]", "-c:v", "copy",
+    "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+    "-movflags", "+faststart", out,
+  ] : [
     "-i", videoOnly,
     "-ss", ss, ...inputArgs, "-i", mezzanine,
     "-t", durS.toFixed(3),

@@ -27,7 +27,7 @@ export const BUILTIN_BACKGROUNDS: Record<string, string> = {
   pixel_rain: "Pixel rain",
 };
 
-export type Background = { kind: "none" } | { kind: "builtin"; id: string } | { kind: "upload"; key: string };
+export type Background = { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
 
 const MAX_BYTES = 95 * 1024 * 1024; // Worker request bodies stop at 100 MB
 const prefix = (tenantId: string) => `${tenantId}/backgrounds/`;
@@ -37,7 +37,7 @@ export async function checkBackground(env: Env, caller: Caller, b: unknown): Pro
   if (b == null) return undefined;
   const v = b as Record<string, unknown>;
   if (v.kind === "none") return { kind: "none" };
-  if (v.kind === "builtin" && typeof v.id === "string" && BUILTIN_BACKGROUNDS[v.id]) return { kind: "builtin", id: v.id };
+  if (v.kind === "builtin" && typeof v.id === "string" && BUILTIN_BACKGROUNDS[v.id]) return { kind: "builtin", id: v.id, ...(v.sound === false ? { sound: false } : {}) };
   if (v.kind === "upload" && typeof v.key === "string" && v.key.startsWith(prefix(caller.tenantId)) && !v.key.includes("..")) {
     if (!(await env.R2_BUCKET.head(v.key))) throw new ApiError(404, "E_NOT_FOUND", "that background video is gone — upload it again");
     return { kind: "upload", key: v.key };

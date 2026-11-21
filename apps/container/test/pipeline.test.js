@@ -427,3 +427,27 @@ test("auto-reframe: follows one face, finds two speakers, falls back without fac
   const none = Array.from({ length: 20 }, (_, k) => ({ t: k * 500, faces: [] }));
   assert.equal(planReframe(none, words, 0, 10000, 16 / 9, 9 / 16).mode, "fit");
 });
+
+test("game sounds: every game makes noise, synthesized into a clean WAV", async () => {
+  const { renderGame, GAMES } = require("../dist/pipeline/games");
+  const { synthSfx } = require("../dist/pipeline/sfx");
+  for (const id of Object.keys(GAMES)) {
+    const sounds = await renderGame(id, 7, 30, 30 * 12, () => {});
+    assert.ok(sounds.length > 0, `${id} makes sounds`);
+    const wav = synthSfx(sounds, 12, 3);
+    assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+    assert.equal(wav.readUInt32LE(24), 48000);
+    let peak = 0, sum = 0; const n = (wav.length - 44) / 2;
+    for (let i = 0; i < n; i++) { const v = Math.abs(wav.readInt16LE(44 + i * 2)); peak = Math.max(peak, v); sum += v; }
+    assert.ok(peak > 2000 && peak <= 30000, `${id}: audible, never clipping (peak ${peak})`);
+    assert.ok(sum / n < 6000, `${id}: a patter, not a wall of noise (mean ${Math.round(sum / n)})`);
+  }
+});
+
+test("captions: power words get their own colour", () => {
+  const { isPowerWord, buildAss } = require("../dist/pipeline/captions");
+  for (const w of ["$500", "10", "3x", "90%", "NEVER", "insane!", "million,"]) assert.ok(isPowerWord(w), w);
+  for (const w of ["the", "and", "really", "gym"]) assert.ok(!isPowerWord(w), w);
+  const ass = buildAss([{ w: "this", t0: 0, t1: 300 }, { w: "is", t0: 300, t1: 500 }, { w: "insane", t0: 500, t1: 900 }], "karaoke_yellow", 1080, 1920);
+  assert.match(ass, /\c&H0035F24A\}INSANE/);
+});

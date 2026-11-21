@@ -19,6 +19,7 @@ export function GamePreview({ id, className }: { id: string; className?: string 
     const tick = (now: number) => {
       acc += Math.min(0.25, (now - last) / 1000); last = now
       while (acc >= dt) { game.step(dt); acc -= dt }
+      if (game.sfx) game.sfx.length = 0 // sounds are for the export; don't let them pile up here
       game.draw(canvas)
       const src = canvas.buf, dst = img.data
       for (let i = 0, j = 0; i < src.length; i += 3, j += 4) { dst[j] = src[i]; dst[j + 1] = src[i + 1]; dst[j + 2] = src[i + 2]; dst[j + 3] = 255 }

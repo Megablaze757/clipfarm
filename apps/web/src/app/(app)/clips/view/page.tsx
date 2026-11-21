@@ -9,6 +9,7 @@ import { GAMES } from '@/lib/games'
 import { GamePreview } from '@/components/game-preview'
 import { formatPrecise } from '@/lib/tokens'
 import { wrapHeadline } from '@/lib/headline'
+import { CAPTION_LOOKS, isPowerWord, lookFor } from '@/lib/captions'
 
 interface Word { i: number; w: string; t0: number; t1: number; speaker?: string }
 interface Render { id: string; preset: string; status: string; download_url: string | null; error_code?: string | null }
@@ -36,7 +37,7 @@ interface EditState {
   background: Background
 }
 
-type Background = { kind: 'none' } | { kind: 'builtin'; id: string } | { kind: 'upload'; key: string }
+type Background = { kind: 'none' } | { kind: 'builtin'; id: string; sound?: boolean } | { kind: 'upload'; key: string }
 interface BackgroundList { builtin: { id: string; name: string }[]; uploads: { key: string; name: string; preview_url: string | null }[] }
 /** CSS stand-ins for the generated backgrounds (the MP4 gets the real thing). */
 const BUILTIN_PREVIEW: Record<string, string> = {
@@ -339,7 +340,7 @@ function Studio() {
                 </div>
               )}
               {captionLine && (
-                <div className={`absolute inset-x-3 text-center pointer-events-none ${split ? 'top-1/2 -translate-y-1/2' : 'bottom-[22%]'}`}>
+                <div className={`absolute inset-x-3 text-center pointer-events-none ${split || twoUp ? 'top-1/2 -translate-y-1/2' : 'bottom-[22%]'}`}>
                   <span className={`inline-block px-2 py-1 rounded leading-snug ${state.style === 'bold_pop' ? 'text-[19px] tracking-wide' : 'text-[15px]'} ${state.style === 'neon_box' ? 'bg-black/70' : ''}`}
                     style={{
                       fontFamily: state.style === 'bold_pop' ? 'Anton, Impact, sans-serif' : 'Montserrat, "Arial Black", sans-serif',
@@ -347,7 +348,7 @@ function Studio() {
                       textShadow: state.style !== 'neon_box' ? '0 0 3px #000, 0 0 3px #000, 0 2px 4px #000' : undefined,
                     }}>
                     {captionLine.words.map((w) => (
-                      <span key={w.i} className={w.i === captionLine.active && state.style !== 'classic' ? (state.style === 'neon_box' ? 'text-cyan-300' : state.style === 'bold_pop' ? 'text-[#4af235]' : 'text-yellow-300') : 'text-white'}>
+                      <span key={w.i} style={{ color: w.i === captionLine.active && state.style !== 'classic' ? lookFor(state.style).active : lookFor(state.style).keyword && isPowerWord(fixed(w)) ? lookFor(state.style).keyword! : '#fff' }}>
                         {state.style === 'karaoke_yellow' || state.style === 'bold_pop' ? fixed(w).toUpperCase() : fixed(w)}{' '}
                       </span>
                     ))}
@@ -409,11 +410,26 @@ function Studio() {
               })}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-xs text-slate-400">Caption style
-                <select value={state.style} onChange={(e) => update((s) => ({ ...s, style: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200">
-                  {STYLES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
-              </label>
+              <div className="text-xs text-slate-400 sm:col-span-2">Caption style
+                <div className="mt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {CAPTION_LOOKS.map((l) => {
+                    const sample = l.upper ? ['THIS', 'IS', 'INSANE'] : ['This', 'is', 'insane']
+                    return (
+                      <button key={l.id} type="button" onClick={() => update((s) => ({ ...s, style: l.id }))}
+                        className={`rounded-xl border p-2 text-left ${state.style === l.id ? 'border-indigo-400 bg-indigo-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'}`}>
+                        <div className="h-10 rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 grid place-items-center">
+                          <span className={`px-1 text-[12px] leading-none ${l.box ? 'bg-black/70 py-0.5' : ''}`} style={{ fontFamily: l.font, fontWeight: l.weight, textShadow: l.box ? undefined : '0 0 2px #000, 0 1px 2px #000' }}>
+                            {sample.slice(0, Math.min(3, l.words)).map((w, i) => (
+                              <span key={i} style={{ color: i === 1 && l.id !== 'classic' ? l.active : i === 2 && l.keyword ? l.keyword : '#fff' }}>{w} </span>
+                            ))}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-300">{l.label}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
               <label className="text-xs text-slate-400 flex items-end gap-2 pb-2">
                 <input type="checkbox" checked={state.captionsOn} onChange={(e) => update((s) => ({ ...s, captionsOn: e.target.checked }))} className="accent-indigo-500" />
                 Burn captions into the video
@@ -440,6 +456,13 @@ function Studio() {
                   <input type="file" accept="video/mp4,video/quicktime,video/webm" className="hidden" disabled={!!bgUploading} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadBackground(f) }} />
                 </label>
               </div>
+              {state.background.kind === 'builtin' && GAMES[state.background.id] && (
+                <label className="flex items-center gap-2 text-[11px] text-slate-300">
+                  <input type="checkbox" className="accent-indigo-500" checked={(state.background as { sound?: boolean }).sound !== false}
+                    onChange={(e) => update((s) => ({ ...s, background: { ...(s.background as { kind: 'builtin'; id: string }), sound: e.target.checked } }))} />
+                  Game sounds (quiet bounces and pops under the speech)
+                </label>
+              )}
               <p className="text-[10px] text-slate-500">Upload your own gameplay recording (MP4/MOV/WebM, under 95 MB — a 1–3 minute loop is plenty; it loops and starts at a different point each export). Use footage you recorded or have the rights to. Uploads are deleted after 7 days.</p>
             </div>
             <label className="block text-xs text-slate-400">On-screen headline (shown for the whole clip)

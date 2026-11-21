@@ -41,6 +41,22 @@ interface Style {
   font: string; size: number; primary: string; highlight: string | null; outline: string; border: 1 | 3; outlineW: number; upper: boolean; shadow?: number;
   /** Words per caption group (viral styles: 2–3). */ words?: number; chars?: number;
   /** The spoken word pops in (scales from 118% to 100%). */ pop?: boolean;
+  /** Power words (numbers, money, "never", "insane"…) stay this colour. */ keyword?: string;
+}
+
+/**
+ * POWER WORDS — the viral-caption trick of colouring the words that carry the
+ * punch (numbers, money, extremes, conflict), so a skimming eye catches them.
+ * Kept deliberately short: colour every third word and nothing stands out.
+ */
+const POWER = new Set(["never", "always", "insane", "crazy", "million", "millions", "billion", "free", "secret", "best", "worst", "biggest",
+  "literally", "everyone", "nobody", "money", "rich", "broke", "dead", "die", "kill", "killed", "love", "hate", "first", "last", "only", "wrong",
+  "truth", "lie", "lied", "fired", "quit", "banned", "illegal", "impossible", "stupid", "genius", "shocking", "huge", "massive", "zero", "every", "cheat", "cheated", "scam"]);
+export function isPowerWord(word: string): boolean {
+  const w = word.toLowerCase().replace(/[^a-z0-9$%']/g, "");
+  if (!w) return false;
+  if (/^\$?\d[\d,.]*(k|m|%|x)?$/.test(w) || /^\d/.test(w)) return true; // 10, $500, 3x, 90%
+  return POWER.has(w);
 }
 
 /**
@@ -52,9 +68,9 @@ interface Style {
  */
 const STYLES: Record<string, Style> = {
   // ASS colours are &HAABBGGRR
-  karaoke_yellow: { font: "Montserrat Black",     size: 0.070, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.008, upper: true, shadow: 3, words: 3, chars: 22, pop: true },
-  bold_pop:       { font: "Anton",                size: 0.080, primary: "&H00FFFFFF", highlight: "&H0035F24A", outline: "&H00000000", border: 1, outlineW: 0.009, upper: true, shadow: 4, words: 2, chars: 16, pop: true },
-  neon_box:       { font: "Montserrat ExtraBold", size: 0.062, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false, words: 4, chars: 26 },
+  karaoke_yellow: { font: "Montserrat Black",     size: 0.070, primary: "&H00FFFFFF", highlight: "&H0000E1FF", outline: "&H00000000", border: 1, outlineW: 0.008, upper: true, shadow: 3, words: 3, chars: 22, pop: true, keyword: "&H0035F24A" },
+  bold_pop:       { font: "Anton",                size: 0.080, primary: "&H00FFFFFF", highlight: "&H0035F24A", outline: "&H00000000", border: 1, outlineW: 0.009, upper: true, shadow: 4, words: 2, chars: 16, pop: true, keyword: "&H0000E1FF" },
+  neon_box:       { font: "Montserrat ExtraBold", size: 0.062, primary: "&H00FFFFFF", highlight: "&H00FFFF00", outline: "&H990F0A0A", border: 3, outlineW: 0.012, upper: false, words: 4, chars: 26, keyword: "&H00FF66FF" },
   classic:        { font: "Montserrat ExtraBold", size: 0.055, primary: "&H00FFFFFF", highlight: null,        outline: "&H00000000", border: 1, outlineW: 0.005, upper: false, shadow: 2 },
 };
 
@@ -102,7 +118,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       if (end <= start) return;
       const on = st.pop ? `{\\c${st.highlight}\\fscx118\\fscy118\\t(0,110,\\fscx100\\fscy100)}` : `{\\c${st.highlight}}`;
       const off = st.pop ? `{\\c${st.primary}\\fscx100\\fscy100}` : `{\\c${st.primary}}`;
-      const text = texts.map((t, j) => (j === k ? `${on}${t}${off}` : t)).join(" ");
+      const kw = (t: string, j: number) => (st.keyword && isPowerWord(line.words[j].w) ? `{\\c${st.keyword}}${t}{\\c${st.primary}}` : t);
+      const text = texts.map((t, j) => (j === k ? `${on}${t}${off}` : kw(t, j))).join(" ");
       events.push(`Dialogue: 0,${ts(start)},${ts(end)},Cap,,0,0,0,,${text}`);
     });
   }

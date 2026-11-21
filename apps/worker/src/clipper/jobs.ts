@@ -113,7 +113,7 @@ export interface ClipEdits {
   template_id?: string;
   title_overlay?: string;
   /** Split-screen footage under the speaker (see backgrounds.ts). */
-  background?: { kind: "none" } | { kind: "builtin"; id: string } | { kind: "upload"; key: string };
+  background?: { kind: "none" } | { kind: "builtin"; id: string; sound?: boolean } | { kind: "upload"; key: string };
 }
 
 /** Applies caption edits to the transcript words inside [t_in, t_out]. */
