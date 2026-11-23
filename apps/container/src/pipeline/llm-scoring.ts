@@ -155,25 +155,34 @@ export function cleanHeadline(raw: string, source: SourceInfo = {}): string {
 }
 
 /**
- * Every picked clip gets a headline: any the judge didn't write (it skipped
- * the clip, or the batch failed) are written in one short follow-up call —
- * and if even that fails, a plain "NAME — TITLE" fallback.
+ * Every picked clip gets a headline AND three options to choose from: any the
+ * judge didn't write (it skipped the clip, dropped alt_titles, or the batch
+ * failed) are written in one short follow-up call. If even that fails, a plain
+ * "NAME — TITLE" fallback.
  */
 export async function ensureHeadlines(cands: Candidate[], source: SourceInfo = {}): Promise<number> {
   const missing = cands.filter((c) => !c.features.context_title);
-  if (!missing.length) return 0;
-  const sys = `You write the on-screen HEADLINE for short clips cut from a long video: WHO (the real name — the channel/streamer from the source line, or a name said in the clip; never a generic "STREAMER") + WHAT happens, present tense, 4-9 words, ALL CAPS, specific and vivid, e.g. "KAI CENAT CRASHES OUT AT FAST FOOD WORKER". Don't invent anything that isn't in the clip. Respond ONLY with JSON: {"headlines":[{"id":number,"headline":"..."}]}`;
-  const user = sourceLine(source) + missing.map((c, k) => `### id ${k}\n${c.text.slice(0, 1200)}`).join("\n\n");
-  const res = await llm(sys, user, 900).catch(() => null);
-  const parsed = res ? parseJsonObject<{ headlines?: { id: number; headline: string }[] }>(res.text) : null;
-  for (const h of parsed?.headlines ?? []) {
-    const c = missing[Number(h.id)];
-    if (c && typeof h.headline === "string" && h.headline.trim()) c.features.context_title = cleanHeadline(h.headline, source);
+  const todo = cands.filter((c) => !c.features.context_title || (c.features.headline_options?.length ?? 0) < 3).slice(0, 25);
+  if (todo.length) {
+    const sys = `You write the on-screen HEADLINE for short clips cut from a long video: WHO (the real name — the channel/streamer from the source line, or a name said in the clip; never a generic "STREAMER") + WHAT happens, present tense, 4-9 words, ALL CAPS, specific and vivid, e.g. "KAI CENAT CRASHES OUT AT FAST FOOD WORKER". Don't invent anything that isn't in the clip. For each clip give THREE different headlines, each a different angle (what happens, the reaction, the stakes or a question). If a clip already has a headline, keep it as the first and write two new ones. Respond ONLY with JSON: {"headlines":[{"id":number,"options":["...","...","..."]}]}`;
+    const user = sourceLine(source) + todo.map((c, k) => `### id ${k}${c.features.context_title ? ` (current headline: ${c.features.context_title})` : ""}\n${c.text.slice(0, 1200)}`).join("\n\n");
+    const res = await llm(sys, user, 1600).catch(() => null);
+    const parsed = res ? parseJsonObject<{ headlines?: { id: number; options?: unknown; headline?: unknown }[] }>(res.text) : null;
+    for (const h of parsed?.headlines ?? []) {
+      const c = todo[Number(h.id)];
+      if (!c) continue;
+      const raw = [...(Array.isArray(h.options) ? h.options : []), h.headline];
+      const opts = raw.filter((t): t is string => typeof t === "string" && !!t.trim()).map((t) => cleanHeadline(t, source));
+      if (!opts.length) continue;
+      if (!c.features.context_title) c.features.context_title = opts[0];
+      c.features.headline_options = [...new Set([c.features.context_title, ...(c.features.headline_options ?? []), ...opts])].slice(0, 3);
+    }
   }
   const name = displayName(source.creator);
   for (const c of missing) {
     if (c.features.context_title || !c.features.title) continue;
     c.features.context_title = cleanHeadline(name ? `${name} — ${c.features.title}` : c.features.title, source);
   }
+  for (const c of cands) if (c.features.context_title && !c.features.headline_options?.length) c.features.headline_options = [c.features.context_title];
   return missing.filter((c) => c.features.context_title).length;
 }

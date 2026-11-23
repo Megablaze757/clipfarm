@@ -123,6 +123,10 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const shown = clipWordsRel
     .filter((x) => !(cuts.length && isFiller(x.w)))
     .map((x) => ({ ...x, t0: mapTime(x.t0, cuts), t1: mapTime(x.t1, cuts) }));
+  // "-t" must sit BEFORE "-i" (an input limit): as an output limit FFmpeg
+  // keeps reading past the clip's end and refills the cut-out time with the
+  // footage that follows, so the cuts never shorten anything.
+  const outS = (outMs / 1000).toFixed(3);
   const asel = cuts.length ? `aselect=${keepExpr(cuts)},asetpts=N/SR/TB,` : "";
 
   // --- video graph ---
@@ -271,7 +275,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   const measure = (async () => {
     if (!info.hasAudio) return base;
     try {
-      const { stderr } = await ffmpeg(["-ss", ss, ...inputArgs, "-i", mezzanine, "-t", durS.toFixed(3), "-vn", "-af", `${asel}${base}:print_format=json`, "-f", "null", "-"]);
+      const { stderr } = await ffmpeg(["-ss", ss, "-t", durS.toFixed(3), ...inputArgs, "-i", mezzanine, "-vn", "-af", `${asel}${base}:print_format=json`, "-f", "null", "-"]);
       const m = JSON.parse(stderr.slice(stderr.lastIndexOf("{"), stderr.lastIndexOf("}") + 1));
       if (Number.isFinite(Number(m.input_i)) && Number(m.input_i) > -70) {
         return `${base}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`;
@@ -282,7 +286,7 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
 
   const videoOnly = join(dir, "video-only.mp4");
   const [af] = await Promise.all([measure, ffmpeg([
-    "-ss", ss, ...inputArgs, "-i", mezzanine, ...bgArgs, ...logoArgs, "-t", durS.toFixed(3),
+    "-ss", ss, "-t", durS.toFixed(3), ...inputArgs, "-i", mezzanine, ...bgArgs, ...logoArgs, "-t", outS,
     "-filter_complex", filters.join(";"),
     "-map", "[vout]", "-an",
     "-c:v", "libx264", "-crf", String(spec.encode.crf), "-preset", spec.encode.preset, "-profile:v", "high",
@@ -293,17 +297,17 @@ export async function renderFinal(mezzanine: string, spec: RenderSpec, dir: stri
   await ffmpeg(sfxFile && info.hasAudio ? [
     // Speech (loudness-normalised) + game sounds ~16 dB under it.
     "-i", videoOnly,
-    "-ss", ss, ...inputArgs, "-i", mezzanine,
+    "-ss", ss, "-t", durS.toFixed(3), ...inputArgs, "-i", mezzanine,
     "-i", sfxFile,
-    "-t", durS.toFixed(3),
+    "-t", outS,
     "-filter_complex", `[1:a:0]${asel}${af},aresample=48000[sp];[2:a]aresample=48000,volume=0.16[fx];[sp][fx]amix=inputs=2:duration=first:normalize=0[a]`,
     "-map", "0:v:0", "-map", "[a]", "-c:v", "copy",
     "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart", out,
   ] : [
     "-i", videoOnly,
-    "-ss", ss, ...inputArgs, "-i", mezzanine,
-    "-t", durS.toFixed(3),
+    "-ss", ss, "-t", durS.toFixed(3), ...inputArgs, "-i", mezzanine,
+    "-t", outS,
     "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
     "-af", `${asel}${af},aresample=48000`, "-c:a", "aac", "-b:a", "128k", "-ac", "2",
     "-movflags", "+faststart", out,

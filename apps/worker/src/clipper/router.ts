@@ -442,7 +442,7 @@ async function renderClip(req: Request, env: Env, caller: Caller, p: string[], c
 }
 
 async function getRender(_r: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
-  const job = await dbOne<Record<string, any>>(env, `render_jobs?id=eq.${requireUuid(p[0], "render")}&tenant_id=eq.${caller.tenantId}&select=id,clip_id,preset,status,uri,error_code,error_detail,queued_at,finished_at`);
+  const job = await dbOne<Record<string, any>>(env, `render_jobs?id=eq.${requireUuid(p[0], "render")}&tenant_id=eq.${caller.tenantId}&select=id,clip_id,preset,status,uri,error_code,error_detail,queued_at,finished_at,duration_ms,container_ms`);
   if (!job) throw new ApiError(404, "E_NOT_FOUND", "render not found");
   return json({
     ...job,

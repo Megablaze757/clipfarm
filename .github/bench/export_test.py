@@ -26,14 +26,16 @@ def main():
     preset = sys.argv[2] if len(sys.argv) > 2 else "tiktok"
     cand = call("GET", f"/v1/projects/{pid}/clips?limit=1")["candidates"][0]
     clip = call("POST", "/v1/clips", {"candidate_id": cand["id"]})
-    style = sys.argv[3] if len(sys.argv) > 3 else None
-    bg = sys.argv[4] if len(sys.argv) > 4 else None
-    if style or bg:
+    style = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "-" else None
+    bg = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "-" else None
+    extra = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}  # e.g. '{"lang":"es","tighten":true}'
+    if style or bg or extra:
         patch = {}
-        if style:
-            patch["captions"] = {"enabled": True, "style": style}
+        if style or "lang" in extra:
+            patch["captions"] = {"enabled": True, **({"style": style} if style else {}), **({"lang": extra.pop("lang")} if "lang" in extra else {})}
         if bg:
             patch["background"] = {"kind": "builtin", "id": bg}
+        patch.update(extra)
         call("PATCH", f"/v1/clips/{clip['id']}", patch)
     secs = (cand["t_out_ms"] - cand["t_in_ms"]) / 1000
     t0 = time.time()
