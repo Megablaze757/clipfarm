@@ -39,21 +39,36 @@ export async function translateCaptions(env: Env, clipId: string, words: Word[],
   const name = LANGUAGES[lang];
   if (!name || !words.length) return null;
   const ls = lines(words);
-  const cacheKey = `_clipper/translations/${clipId}-${lang}-${await key(JSON.stringify([ls.map((l) => l.text), headline ?? ""]))}.json`;
+  const cacheKey = `_clipper/translations/v2-${clipId}-${lang}-${await key(JSON.stringify([ls.map((l) => l.text), headline ?? ""]))}.json`;
   const cached = await env.R2_BUCKET.get(cacheKey);
   if (cached) return (await cached.json()) as { words: Word[]; headline?: string };
 
+  // Lines go out NUMBERED and come back keyed by number, so a model that merges
+  // or splits a line can't shift every later caption; a missing line keeps the
+  // original words instead of failing the whole translation.
+  const numbered = Object.fromEntries(ls.map((l, k) => [String(k + 1), l.text]));
+  const parse = (t: string): { lines: string[]; headline?: string } | null => {
+    try {
+      const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1)) as { lines?: unknown; headline?: unknown };
+      const src = j.lines;
+      const got = Array.isArray(src) && src.length === ls.length
+        ? src.map((x) => String(x ?? ""))
+        : src && typeof src === "object" && !Array.isArray(src)
+          ? ls.map((_, k) => String((src as Record<string, unknown>)[String(k + 1)] ?? ""))
+          : null;
+      if (!got || got.filter((x) => x.trim()).length < Math.ceil(ls.length * 0.85)) return null;
+      return { lines: got.map((x, k) => (x.trim() ? x : ls[k].text)), headline: typeof j.headline === "string" ? j.headline : undefined };
+    } catch { return null; }
+  };
   const out = await completeWithFallbacks(env, {
-    system: `You translate short-form video captions into ${name}. Keep the speaker's tone, slang and energy — natural spoken ${name}, not formal text. Keep each line about as short as the original (captions show 2-4 words at a time). Keep names, brands and numbers. Respond ONLY with JSON: {"lines":["...", ...], "headline":"..."} — exactly one translated line per input line, in order.`,
-    user: JSON.stringify({ lines: ls.map((l) => l.text), headline: headline ?? "" }),
-    maxTokens: Math.min(4000, 200 + ls.length * 40),
+    system: `You translate short-form video captions into ${name}. Keep the speaker's tone, slang and energy — natural spoken ${name}, not formal text. Keep each line about as short as the original (captions show 2-4 words at a time). Keep people's names, brands and numbers exactly as written — never swap a name for a generic word like "streamer". The input is {"lines":{"1":"...","2":"..."},"headline":"..."}. Respond ONLY with JSON in the same shape: {"lines":{"1":"...","2":"...", ...},"headline":"..."} — one translated line for EVERY number, same numbers.`,
+    user: JSON.stringify({ lines: numbered, headline: headline ?? "" }),
+    maxTokens: Math.min(4000, 300 + ls.length * 45),
     json: true,
     priority: true,
-    validate: (t) => {
-      try { const j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1)); return Array.isArray(j.lines) && j.lines.length === ls.length; } catch { return false; }
-    },
+    validate: (t) => parse(t) !== null,
   });
-  const j = JSON.parse(out.text.slice(out.text.indexOf("{"), out.text.lastIndexOf("}") + 1)) as { lines: string[]; headline?: string };
+  const j = parse(out.text)!;
   // Spread each translated line over its original time span, by word length.
   const res: Word[] = [];
   ls.forEach((l, k) => {

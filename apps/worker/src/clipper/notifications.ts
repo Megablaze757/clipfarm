@@ -1,3 +1,4 @@
+import { AI_HEALTH_KEY } from "./internal";
 import { appUrl, type Env } from "./env";
 import { dbJson } from "./db";
 import { GUEST_TENANT } from "./plans";
@@ -70,6 +71,16 @@ export async function sendNotifications(env: Env): Promise<void> {
       ...failed.map((f) => ({ what: `Project “${f.title}”`, why: `${f.error_code ?? "error"}: ${f.error_detail ?? ""}` })),
       ...failedExports.map((r) => ({ what: `Export (${r.preset})`, why: `${r.error_code ?? "error"}: ${r.error_detail ?? ""}` })),
     ];
+    // The AI ladder failing turns every project into rule-based scoring with no
+    // headlines — silently. Tell the admins, at most once a day.
+    const today0 = now.slice(0, 10);
+    if (settings.ai_alert_sent !== today0) {
+      const health = await env.R2_BUCKET.get(AI_HEALTH_KEY).then((o) => (o ? o.json<{ last_failure_at: string; error: string }>() : null)).catch(() => null);
+      if (health && health.last_failure_at > cursor) {
+        await updateSettings(env, (s) => ({ ...s, ai_alert_sent: today0 }));
+        items.unshift({ what: "AI scoring is failing (clips fall back to rule-based scoring, no headlines)", why: health.error });
+      }
+    }
     if (items.length) {
       const rows = items.map((x) => `<div style="padding:8px 0;border-bottom:1px solid #f0f0f6;"><strong>${esc(x.what)}</strong><br><span style="color:#b42318;">${esc(x.why.slice(0, 240))}</span></div>`).join("\n");
       for (const a of to) {

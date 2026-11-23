@@ -30,6 +30,8 @@ export interface Settings {
   notify_cursor?: string;
   /** notifications.ts: the UTC date the admin daily summary last went out. */
   daily_sent?: string;
+  /** Day (YYYY-MM-DD) the admins were last told the AI ladder is failing. */
+  ai_alert_sent?: string;
 }
 
 const KEY = "_clipper/settings.json";

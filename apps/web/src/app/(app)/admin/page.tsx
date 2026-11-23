@@ -303,6 +303,13 @@ function System() {
         <h3 className="text-sm font-bold text-white mb-1">AI keys (tested just now)</h3>
         <p className="text-xs text-slate-400 mb-2">Transcription is using: <span className="text-slate-200">{data.transcription}</span></p>
         {ai('groq', 'Groq')}{ai('openrouter', 'OpenRouter')}{ai('nvidia', 'NVIDIA')}
+        {data.ai_last_failure && (
+          <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3">
+            <div className="text-xs font-bold text-rose-200">Last time every AI model failed: {new Date(data.ai_last_failure.last_failure_at).toLocaleString()}</div>
+            <div className="text-[11px] text-rose-100/80 mt-1 break-words">{String(data.ai_last_failure.error).slice(0, 600)}</div>
+            <div className="text-[11px] text-slate-400 mt-1">A key can work and its model still be retired (“410 Gone”) — the reason above says which.</div>
+          </div>
+        )}
       </section>
       <section className="glass-panel rounded-2xl p-5 border border-slate-800">
         <h3 className="text-sm font-bold text-white mb-1">Everything else</h3>

@@ -1,3 +1,4 @@
+import { AI_HEALTH_KEY } from "./internal";
 import type { Env } from "./env";
 import type { Caller } from "./auth";
 import { dbCount, dbJson, dbPatch } from "./db";
@@ -182,7 +183,9 @@ export async function system(env: Env): Promise<Response> {
     probe(v("OPENROUTER_API_KEY"), "https://openrouter.ai/api/v1/auth/key"),
     probe(v("NVIDIA_SECRET") || v("NVIDIA_API_KEY"), "https://integrate.api.nvidia.com/v1/models"),
   ]);
+  const health = await env.R2_BUCKET.get(AI_HEALTH_KEY).then((o) => (o ? o.json<{ last_failure_at: string; error: string }>() : null)).catch(() => null);
   return json({
+    ai_last_failure: health,
     ai: {
       groq: { ...groq, role: "Transcription (fast, ~1 min per hour of audio) + AI fallback", fix: "Create a key at console.groq.com → API Keys, then set it as the Worker secret GROQ_SECRET." },
       openrouter: { ...openrouter, role: "Clip judging and headlines", fix: "Create a key at openrouter.ai/keys, set it as OPENROUTER_API_KEY." },

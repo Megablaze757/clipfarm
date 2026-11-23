@@ -94,6 +94,9 @@ export async function internalJob(env: Env, kind: string, id: string): Promise<R
   return json({ jobId: job.id, clipId: job.clip_id, tenantId: job.tenant_id, projectId: job.spec.project_id, spec: job.spec });
 }
 
+/** Last time every AI provider failed for a runner request (and why). */
+export const AI_HEALTH_KEY = "_clipper/ai_health.json";
+
 /**
  * The Container's door to the shared AI ladder.
  *
@@ -126,7 +129,10 @@ export async function internalComplete(req: Request, env: Env): Promise<Response
   } catch (e) {
     // Logged so a dead key or retired model shows up in `wrangler tail`
     // instead of silently turning every project into heuristic-only scoring.
-    console.error(`internal complete: ${(e instanceof Error ? e.message : String(e)).slice(0, 1500)}`);
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1500);
+    console.error(`internal complete: ${msg}`);
+    // Remembered for the admin System tab and the cron's "AI is down" alert.
+    await env.R2_BUCKET.put(AI_HEALTH_KEY, JSON.stringify({ last_failure_at: new Date().toISOString(), error: msg })).catch(() => {});
     return json({ error: e instanceof Error ? e.message : String(e) }, 503);
   }
 }
