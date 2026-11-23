@@ -13,10 +13,22 @@ import urllib.request
 API = os.environ.get("CLIPPER_API_URL", "https://apex-api.fitnessguru.workers.dev").rstrip("/")
 
 
+def _test_key():
+    """The private live-test workspace key (never committed): env var, or ~/.clipper/test-key."""
+    k = os.environ.get("CLIPPER_TEST_KEY")
+    if k:
+        return k.strip()
+    path = os.path.join(os.path.expanduser("~"), ".clipper", "test-key")
+    return open(path).read().strip() if os.path.exists(path) else None
+
+
+TEST_HEADERS = {"X-Clipper-Test-Key": _test_key()} if _test_key() else {}
+
+
 def call(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method,
-                                 headers={"Content-Type": "application/json", "User-Agent": "clipper-url-test"})
+                                 headers={**TEST_HEADERS, "Content-Type": "application/json", "User-Agent": "clipper-url-test"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read() or b"null")
 

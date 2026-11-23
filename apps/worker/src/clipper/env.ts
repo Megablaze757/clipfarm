@@ -21,6 +21,8 @@ export interface Env extends PocketAthleteEnv {
   CLIPPER_GUEST_MODE?: string;
   /** Comma-separated admin emails (a Worker SECRET, so addresses stay out of the repo). */
   CLIPPER_ADMIN_EMAILS?: string;
+  /** Unlocks the private live-test workspace (TEST_TENANT) via the X-Clipper-Test-Key header. */
+  CLIPPER_TEST_KEY?: string;
 
   /**
    * Optional. Signs media URLs and authenticates the Container's calls back.

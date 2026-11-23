@@ -1,7 +1,7 @@
 import { AI_HEALTH_KEY } from "./internal";
 import { appUrl, type Env } from "./env";
 import { dbJson } from "./db";
-import { GUEST_TENANT } from "./plans";
+import { GUEST_TENANT, TEST_TENANT } from "./plans";
 import { sendTemplate } from "./accounts";
 import { overviewData } from "./admin";
 import { getSettings, updateSettings } from "./settings";
@@ -34,7 +34,7 @@ export async function sendNotifications(env: Env): Promise<void> {
 
   // 1. Clips ready → the project's owner.
   const ready = await dbJson<{ id: string; tenant_id: string; title: string; candidate_count: number | null }[]>(env,
-    `projects?status=eq.ready&deleted_at=is.null&updated_at=gt.${cursor}&tenant_id=neq.${GUEST_TENANT}&select=id,tenant_id,title,candidate_count&limit=50`);
+    `projects?status=eq.ready&deleted_at=is.null&updated_at=gt.${cursor}&tenant_id=not.in.(${GUEST_TENANT},${TEST_TENANT})&select=id,tenant_id,title,candidate_count&limit=50`);
   for (const p of ready) {
     const marker = `_clipper/notified/ready-${p.id}`;
     if (await env.R2_BUCKET.head(marker)) continue;

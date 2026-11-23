@@ -49,7 +49,7 @@ export async function isAdminUser(env: Env, user: { id: string; email?: string; 
  * CLIPPER_GUEST_MODE = "off" is set on the Worker.
  */
 export { GUEST_TENANT } from "./plans";
-import { GUEST_TENANT, guestPlan } from "./plans";
+import { GUEST_TENANT, TEST_TENANT, guestPlan } from "./plans";
 let guestReady = false;
 
 async function guestCaller(env: Env): Promise<Caller> {
@@ -65,8 +65,36 @@ async function guestCaller(env: Env): Promise<Caller> {
 }
 
 
+/**
+ * Automated live tests: a request carrying the secret X-Clipper-Test-Key gets
+ * its own private workspace (TEST_TENANT) with guest-style permissions — no
+ * billing, no emails, never admin — and it keeps working with guest mode off.
+ */
+let testReady = false;
+async function testCaller(req: Request, env: Env): Promise<Caller | null> {
+  const got = req.headers.get("X-Clipper-Test-Key");
+  const want = env.CLIPPER_TEST_KEY ?? "";
+  if (!got || want.length < 32) return null;
+  const [a, b] = await Promise.all([got, want].map((s) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))));
+  const x = new Uint8Array(a), y = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  if (diff !== 0) throw new ApiError(401, "E_UNAUTHORIZED", "bad test key");
+  if (!testReady) {
+    await dbJson(env, "tenants?on_conflict=id", {
+      method: "POST",
+      headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+      body: JSON.stringify([{ id: TEST_TENANT, name: "Clipper live tests", plan: "creator" }]),
+    });
+    testReady = true;
+  }
+  return { userId: "", email: "", tenantId: TEST_TENANT, role: "owner", plan: { ...guestPlan(), label: "Live tests" }, guest: true, admin: false };
+}
+
 /** Verifies the Supabase JWT (the same accounts as PocketAthlete) and loads the Clipper workspace. */
 export async function requireCaller(req: Request, env: Env): Promise<Caller> {
+  const tester = await testCaller(req, env);
+  if (tester) return tester;
   const auth = req.headers.get("Authorization") ?? "";
   if (!/^Bearer\s+\S+/i.test(auth)) {
     if (await guestModeOn(env)) return guestCaller(env);
