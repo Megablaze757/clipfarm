@@ -717,8 +717,8 @@ const GROQ_DEFAULT_FALLBACKS = ["openai/gpt-oss-120b"];
  * 2026-08-04. There is no ":free" variant to prefer — see isFree() — so these
  * are free by virtue of being on integrate.api.nvidia.com at all.
  */
-const NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct";
-const NVIDIA_DEFAULT_FALLBACKS = ["nvidia/llama-3.3-nemotron-super-49b-v1"];
+const NVIDIA_DEFAULT_MODEL = "mistralai/mistral-large-4-1t-a52b"; // llama-3.3 retired 2026-08-26
+const NVIDIA_DEFAULT_FALLBACKS = ["moonshotai/kimi-k3.1-pro", "nvidia/nemotron-3.5-lightning-30b-a3b"];
 
 /**
  * An OpenRouter `:free` rung — billed at nothing, so it can be RACED.

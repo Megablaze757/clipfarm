@@ -124,6 +124,9 @@ export async function internalComplete(req: Request, env: Env): Promise<Response
     });
     return json({ text: out.text, model: out.model, cost: out.cost });
   } catch (e) {
+    // Logged so a dead key or retired model shows up in `wrangler tail`
+    // instead of silently turning every project into heuristic-only scoring.
+    console.error(`internal complete: ${(e instanceof Error ? e.message : String(e)).slice(0, 1500)}`);
     return json({ error: e instanceof Error ? e.message : String(e) }, 503);
   }
 }
