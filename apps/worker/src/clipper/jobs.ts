@@ -129,6 +129,8 @@ export interface ClipEdits {
   layout?: { mode?: "auto" | "center" | "manual" | "fit" | "two"; aspect?: string; keyframes?: { t_ms: number; cx: number }[]; two?: { a: number; b: number } | null };
   template_id?: string;
   title_overlay?: string;
+  /** Show the on-screen headline (default on; off keeps the text for later). */
+  headline?: boolean;
   /** Cut long pauses and "um/uh" on export (default on). */
   tighten?: boolean;
   /** Jump-zoom punch-ins on export (default on). */
@@ -193,7 +195,7 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
     },
     background: edits.background?.kind === "builtin" || edits.background?.kind === "upload" ? edits.background : { kind: "none" },
     // The headline stays up for the whole clip — it's the context, not an intro card.
-    overlays: edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, clip.t_out_ms - clip.t_in_ms] }] : [],
+    overlays: edits.headline !== false && edits.title_overlay ? [{ type: "title", text: edits.title_overlay.slice(0, 80), t_ms: [0, clip.t_out_ms - clip.t_in_ms] }] : [],
     watermark: planFor(tenant?.plan).watermark, // FR-11.6 — decided here, never by the client
     tighten: edits.tighten !== false,
     zoom: edits.zoom !== false,
@@ -205,7 +207,7 @@ export async function dispatchRender(env: Env, jobId: string): Promise<void> {
   // Translated captions (and headline), if the clip asks for a language.
   const lang = edits.captions?.lang;
   if (lang && LANGUAGES[lang] && spec.captions.mode === "burn") {
-    const tr = await translateCaptions(env, clip.id, spec.captions.words, edits.title_overlay, lang)
+    const tr = await translateCaptions(env, clip.id, spec.captions.words, spec.overlays[0]?.text, lang)
       .catch((e) => { console.error(`translate ${clip.id} → ${lang}: ${String(e)}`); return null; });
     if (tr) {
       spec.captions.words = tr.words.map((w, i) => ({ i, w: w.w, t0: w.t0, t1: w.t1 }));

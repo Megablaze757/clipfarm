@@ -1,3 +1,4 @@
+import { writeHeadline } from "./headline";
 import { internalSecret, type Env } from "./env";
 import { requireCaller, requireEditor, requireInternal, type Caller } from "./auth";
 import { dbCount, dbInsert, dbJson, dbOne, dbPatch } from "./db";
@@ -351,6 +352,13 @@ async function createClip(req: Request, env: Env, caller: Caller): Promise<Respo
   await ownProject(env, caller, cand.project_id);
   const existing = await dbOne<{ id: string }>(env, `clips?candidate_id=eq.${cand.id}&tenant_id=eq.${caller.tenantId}&select=id`);
   if (existing) return json({ id: existing.id, existing: true });
+  // Every clip opens with a headline on screen: the engine's, or one written now.
+  let headline: string | null = cand.features?.context_title ? String(cand.features.context_title).slice(0, 80) : null;
+  if (!headline) {
+    const tr = await dbOne<{ words: { w: string; t0: number; t1: number }[] }>(env, `transcripts?project_id=eq.${cand.project_id}&select=words`).catch(() => null);
+    const text = (tr?.words ?? []).filter((w) => w.t1 > cand.t_in_ms && w.t0 < cand.t_out_ms).map((w) => w.w).join(" ");
+    headline = await writeHeadline(env, text, cand.features?.creator ?? null);
+  }
   const clip = await dbInsert<{ id: string }>(env, "clips", {
     candidate_id: cand.id, tenant_id: caller.tenantId,
     title: cand.features?.title ?? cand.rationale ?? null,
@@ -361,7 +369,7 @@ async function createClip(req: Request, env: Env, caller: Caller): Promise<Respo
       // Framed on the speaker's face by the runner (facetrack.ts), if it found one.
       layout: autoLayout(cand.features?.auto_reframe),
       // The engine's context headline ("KAI CENAT CRASHES OUT AT …"), editable in the editor.
-      ...(cand.features?.context_title ? { title_overlay: String(cand.features.context_title).slice(0, 80) } : {}),
+      ...(headline ? { title_overlay: headline, headline: true } : {}),
     },
   });
   return json({ id: clip.id }, 201);
@@ -394,7 +402,7 @@ async function getClip(_r: Request, env: Env, caller: Caller, p: string[]): Prom
 async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): Promise<Response> {
   requireEditor(caller);
   const clip = await ownClip(env, caller, p[0]);
-  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; background?: unknown; tighten?: boolean; zoom?: boolean; template_id?: string; title_overlay?: string; status?: string }>(req);
+  const b = await body<{ t_in_ms?: number; t_out_ms?: number; title?: string; captions?: ClipEdits["captions"]; layout?: ClipEdits["layout"]; background?: unknown; tighten?: boolean; zoom?: boolean; template_id?: string; title_overlay?: string; headline?: boolean; status?: string }>(req);
   const t_in = b.t_in_ms != null ? Math.round(Number(b.t_in_ms)) : clip.t_in_ms;
   const t_out = b.t_out_ms != null ? Math.round(Number(b.t_out_ms)) : clip.t_out_ms;
   const dur = t_out - t_in;
@@ -408,6 +416,7 @@ async function patchClip(req: Request, env: Env, caller: Caller, p: string[]): P
   if (typeof b.zoom === "boolean") edits.zoom = b.zoom;
   if (b.template_id !== undefined) edits.template_id = b.template_id;
   if (b.title_overlay !== undefined) edits.title_overlay = String(b.title_overlay).slice(0, 80);
+  if (typeof b.headline === "boolean") edits.headline = b.headline;
   const patch: Record<string, unknown> = { t_in_ms: t_in, t_out_ms: t_out, edits, updated_at: new Date().toISOString() };
   if (b.title !== undefined) patch.title = String(b.title).slice(0, 200);
   if (b.status && ["draft", "approved"].includes(b.status)) patch.status = b.status;

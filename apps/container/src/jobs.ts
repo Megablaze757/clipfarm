@@ -5,7 +5,7 @@ import { db as supabase, ffAuthArgs, notifyNext, r2Delete, r2DownloadParallel, r
 import type { Candidate } from "./lib/types";
 import { fetchSource } from "./pipeline/ingest";
 import { analyzeLoudness, browserPlayable, energyEnvelope, extractAudio, makeMezzanine, poster } from "./pipeline/transcode";
-import { localChunksUsed, pool, transcribe } from "./pipeline/asr";
+import { groqPreferred, localChunksUsed, pool, transcribe } from "./pipeline/asr";
 import { sentences } from "./pipeline/text";
 import { generateWindows, targetCount } from "./pipeline/candidates";
 import { finalScore, heuristicScore, reactionEvents, selectMMR, SCORER_VERSION } from "./pipeline/scoring";
@@ -364,7 +364,7 @@ export async function processProject(job: ProcessJob): Promise<void> {
       // review_proxy_key = the media the editor and shortlist play.
       progress: 100, poster_key: `${prefix}/thumbs/poster.jpg`, review_proxy_key: long ? null : mediaKey,
       candidate_count: saved.length, top_score: picked[0]?.score ?? null,
-      model_versions: { asr: localChunksUsed() ? `groq/whisper-large-v3-turbo + local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only", ...(chat ? { chat: `${chat.messages} messages, ${chat.spikes.length} spikes` } : {}), ...(zones ? { long_stream: `${zones.length} hot zones` } : {}) },
+      model_versions: { asr: localChunksUsed() ? `local faster-whisper/${process.env.WHISPER_MODEL || "small"} (${localChunksUsed()} chunks)${groqPreferred() ? " + groq" : ""}` : "groq/whisper-large-v3-turbo", scorer: SCORER_VERSION, llm: model ?? "heuristic-only", ...(chat ? { chat: `${chat.messages} messages, ${chat.spikes.length} spikes` } : {}), ...(zones ? { long_stream: `${zones.length} hot zones` } : {}) },
     });
     stage("ready");
     // If a working copy replaced the upload, the original isn't needed: delete

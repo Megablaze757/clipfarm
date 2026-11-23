@@ -180,9 +180,20 @@ export async function ensureHeadlines(cands: Candidate[], source: SourceInfo = {
   }
   const name = displayName(source.creator);
   for (const c of missing) {
-    if (c.features.context_title || !c.features.title) continue;
-    c.features.context_title = cleanHeadline(name ? `${name} — ${c.features.title}` : c.features.title, source);
+    if (c.features.context_title) continue;
+    if (c.features.title) { c.features.context_title = cleanHeadline(name ? `${name} — ${c.features.title}` : c.features.title, source); continue; }
+    // No AI at all: the clip's opening line as an on-screen quote.
+    const q = quoteHeadline(c.text);
+    if (q) c.features.context_title = q;
   }
   for (const c of cands) if (c.features.context_title && !c.features.headline_options?.length) c.features.headline_options = [c.features.context_title];
   return missing.filter((c) => c.features.context_title).length;
+}
+
+/** The clip's first sentence (up to 8 words) as an on-screen quote: “I LOST MY SENSE OF TASTE”. */
+export function quoteHeadline(text: string): string | null {
+  const first = text.replace(/\s+/g, " ").trim().split(/(?<=[.?!])\s+/)[0] ?? "";
+  const words = first.replace(/["“”]/g, "").split(/\s+/).filter(Boolean).slice(0, 8);
+  if (words.length < 3) return null;
+  return `“${words.join(" ").replace(/[,;:]$/, "").toUpperCase()}${first.split(/\s+/).filter(Boolean).length > 8 ? "…" : ""}”`.slice(0, 80);
 }

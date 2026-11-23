@@ -35,6 +35,7 @@ interface EditState {
   aspect: string
   keyframes: Keyframe[]
   overlay: string
+  headlineOn: boolean
   background: Background
   tighten: boolean
   zoom: boolean
@@ -72,7 +73,7 @@ function toState(r: ClipResponse): EditState {
     t_in: r.clip.t_in_ms, t_out: r.clip.t_out_ms, title: r.clip.title ?? '',
     captionsOn: e.captions?.enabled !== false, style: e.captions?.style ?? 'karaoke_yellow', fixes,
     mode: e.layout?.mode ?? 'auto', aspect: e.layout?.aspect ?? '9:16', keyframes: e.layout?.keyframes ?? [], two: e.layout?.two ?? null,
-    overlay: e.title_overlay ?? '', background: e.background ?? { kind: 'none' }, tighten: e.tighten !== false, zoom: e.zoom !== false, lang: e.captions?.lang ?? '',
+    overlay: e.title_overlay ?? '', headlineOn: e.headline !== false, background: e.background ?? { kind: 'none' }, tighten: e.tighten !== false, zoom: e.zoom !== false, lang: e.captions?.lang ?? '',
   }
 }
 
@@ -81,7 +82,7 @@ function toPatch(s: EditState) {
     t_in_ms: Math.round(s.t_in), t_out_ms: Math.round(s.t_out), title: s.title,
     captions: { enabled: s.captionsOn, style: s.style, lang: s.lang || undefined, edits: Object.entries(s.fixes).map(([i, text]) => ({ word_index: Number(i), text })) },
     layout: { mode: s.mode, aspect: s.aspect, keyframes: s.mode === 'fit' || s.mode === 'center' || s.mode === 'two' ? [] : s.keyframes, two: s.two },
-    title_overlay: s.overlay, background: s.background, tighten: s.tighten, zoom: s.zoom,
+    title_overlay: s.overlay, headline: s.headlineOn, background: s.background, tighten: s.tighten, zoom: s.zoom,
   }
 }
 
@@ -342,7 +343,7 @@ function Studio() {
                   })()}
                 </div>
               )}
-              {state.overlay && (
+              {state.overlay && state.headlineOn && (
                 // The context headline — same look as the export: black on white boxes, whole clip.
                 <div className={`absolute inset-x-3 flex flex-col items-center gap-[3px] pointer-events-none ${split ? 'top-[3.5%]' : 'top-[10%]'}`}>
                   {wrapHeadline(state.overlay.toUpperCase(), 20).slice(0, 3).map((line, k) => (
@@ -486,26 +487,31 @@ function Studio() {
               </label>
               <span className="text-[10px] text-slate-500">Applied when you export{state.lang ? ' — captions and headline are translated' : ''}.</span>
             </div>
-            <label className="block text-xs text-slate-400">On-screen headline (shown for the whole clip)
-              <input value={state.overlay} maxLength={80} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />
-              <span className="block mt-1 text-[10px] text-slate-500">
-                Who + what happens, so a stranger gets the context instantly.
-                {state.overlay && <> · <button type="button" onClick={() => update((s) => ({ ...s, overlay: '' }))} className="underline">remove</button></>}
-              </span>
-              {(() => {
-                // The engine's headline options — pick one with a click.
-                const f = data.candidate?.features ?? {}
-                const opts: string[] = [...new Set<string>([...(f.headline_options ?? []), ...(f.context_title ? [f.context_title] : [])])].slice(0, 3)
-                return opts.length > 0 && (
-                  <span className="mt-2 flex flex-wrap gap-1.5">
-                    {opts.map((o) => (
-                      <button key={o} type="button" onClick={() => update((s) => ({ ...s, overlay: o }))}
-                        className={`px-2 py-1 rounded-md text-[10px] font-bold border ${state.overlay === o ? 'border-indigo-400 bg-indigo-500/20 text-white' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}>{o}</button>
-                    ))}
-                  </span>
-                )
-              })()}
-            </label>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-slate-200">On-screen headline</div>
+                  <div className="text-[11px] text-slate-500">Who + what happens, shown for the whole clip so strangers get the context.</div>
+                </div>
+                <Switch on={state.headlineOn} label="Show headline" onChange={(v) => update((s) => ({ ...s, headlineOn: v }))} />
+              </div>
+              <div className={state.headlineOn ? '' : 'opacity-50'}>
+                <input value={state.overlay} maxLength={80} disabled={!state.headlineOn} placeholder="e.g. KAI CENAT CRASHES OUT AT FAST FOOD WORKER" onChange={(e) => update((s) => ({ ...s, overlay: e.target.value }))} className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 uppercase placeholder:normal-case" />
+                {(() => {
+                  // The engine's headline options — pick one with a click.
+                  const f = data.candidate?.features ?? {}
+                  const opts: string[] = [...new Set<string>([...(f.headline_options ?? []), ...(f.context_title ? [f.context_title] : [])])].slice(0, 3)
+                  return opts.length > 1 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {opts.map((o) => (
+                        <button key={o} type="button" disabled={!state.headlineOn} onClick={() => update((s) => ({ ...s, overlay: o }))}
+                          className={`px-2 py-1 rounded-md text-[10px] font-semibold border ${state.overlay === o ? 'border-indigo-400 bg-indigo-500/15 text-white' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{o}</button>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </div>
+            </div>
           </section>
 
           <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
@@ -595,4 +601,14 @@ function Studio() {
 
 export default function ClipPage() {
   return <Suspense fallback={<Loading />}><Studio /></Suspense>
+}
+
+/** A small accessible on/off switch. */
+function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${on ? 'bg-indigo-500' : 'bg-slate-700'}`}>
+      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+    </button>
+  )
 }

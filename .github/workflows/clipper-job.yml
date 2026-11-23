@@ -91,8 +91,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Python for the built-in Whisper fallback. faster-whisper itself installs
-      # only if Groq rate-limits this job, so normal jobs don't pay for it.
+      # Python for built-in Whisper — the default transcriber (Groq only with
+      # CLIPPER_ASR=groq). faster-whisper is installed below, from the pip cache.
       # Exports (render jobs) never transcribe, so they skip all of this.
       - uses: actions/setup-python@v5
         if: env.JOB_KIND == 'process'
@@ -114,10 +114,11 @@ jobs:
           path: |
             ~/clipper-vision
             ~/.cache/pip
-          key: vision-v1-${{ hashFiles('apps/container/scripts/requirements-vision.txt') }}
-      - name: Install face detection
+          key: vision-whisper-v2-${{ hashFiles('apps/container/scripts/requirements-vision.txt') }}
+      - name: Install face detection + Whisper
         if: env.JOB_KIND == 'process'
         run: |
+          "${{ steps.py.outputs.python-path }}" -m pip install --quiet "faster-whisper>=1.1,<2" || echo "::warning::faster-whisper preinstall failed — it will install on first use"
           "${{ steps.py.outputs.python-path }}" -m pip install --quiet -r apps/container/scripts/requirements-vision.txt || echo "::warning::OpenCV install failed — clips will use a centre crop"
           mkdir -p ~/clipper-vision
           M=~/clipper-vision/face_detection_yunet_2023mar.onnx

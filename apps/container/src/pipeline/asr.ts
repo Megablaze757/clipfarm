@@ -74,8 +74,14 @@ const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 /** Set once Groq rejects the key: the rest of the job skips straight to local Whisper. */
 let groqUnusable = false;
 
+/**
+ * Built-in Whisper is the default transcriber (reliable, no key, no quota);
+ * Groq is opt-in with CLIPPER_ASR=groq on the runner.
+ */
+export const groqPreferred = () => process.env.CLIPPER_ASR === "groq" || !localAvailable();
+
 async function transcribeChunk(path: string, language: string | null): Promise<GroqResponse> {
-  if (groqUnusable && localAvailable()) return transcribeLocally(path, language);
+  if ((groqUnusable || !groqPreferred()) && localAvailable()) return transcribeLocally(path, language);
   let waited = 0;
   for (let attempt = 0; ; attempt++) {
     const r = await transcribeViaWorker(await openAsBlob(path), language)
