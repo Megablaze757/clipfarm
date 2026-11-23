@@ -129,7 +129,7 @@ export default function ProjectsPage() {
         <form onSubmit={onUrl} className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input value={url} onChange={(e) => setUrl(e.target.value)} type="url" placeholder="Paste a YouTube, Twitch, Vimeo or direct video link…"
             className="md:col-span-3 w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-600 outline-none font-mono" />
-          <button disabled={!!busy || !url.trim()} className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-sm rounded-xl disabled:opacity-50">
+          <button disabled={!!busy || !url.trim()} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm rounded-xl disabled:opacity-50">
             {busy === 'url' ? 'Starting…' : 'Import link'}
           </button>
         </form>

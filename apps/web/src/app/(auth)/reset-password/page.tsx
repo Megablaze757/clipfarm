@@ -88,7 +88,7 @@ export default function ResetPasswordPage() {
             </div>
             <label className="flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="accent-indigo-500" /> Show passwords</label>
             {error && <p className="text-xs text-rose-300" role="alert">{error}</p>}
-            <button disabled={busy} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-sm disabled:opacity-60">
+            <button disabled={busy} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm disabled:opacity-60">
               {busy ? 'Saving…' : 'Save new password'}
             </button>
           </form>

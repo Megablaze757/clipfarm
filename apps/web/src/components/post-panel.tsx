@@ -41,7 +41,7 @@ export function PostPanel({ clipId, renderId, headline, title }: { clipId: strin
 
   if (!conns) return null
   return (
-    <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
+    <section className="glass-panel rounded-2xl p-5 border border-slate-800 space-y-3">
       <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Post</h2>
       {!connected.length ? (
         <p className="text-xs text-slate-400">Connect YouTube, TikTok or Instagram to post from here. <Link href="/settings/connections" className="text-indigo-300 underline">Connections</Link></p>
@@ -63,7 +63,7 @@ export function PostPanel({ clipId, renderId, headline, title }: { clipId: strin
             <label className="text-slate-400">When
               <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="ml-2 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200" />
             </label>
-            <button onClick={send} disabled={busy || !pick.size} className="px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold disabled:opacity-50">
+            <button onClick={send} disabled={busy || !pick.size} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold disabled:opacity-50">
               {busy ? 'Sending…' : when ? 'Schedule' : 'Post now'}
             </button>
           </div>

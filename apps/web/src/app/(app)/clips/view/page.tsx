@@ -317,7 +317,7 @@ function Studio() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         <div className="lg:col-span-6 space-y-4">
-          <div className="glass-panel rounded-3xl p-5 border border-slate-800 flex flex-col items-center gap-4">
+          <div className="glass-panel rounded-2xl p-5 border border-slate-800 flex flex-col items-center gap-4">
             <div ref={frameRef} className="relative bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl" style={{ width: frameW, height: frameH, maxWidth: '100%' }}>
               {state.mode === 'fit' && !split && <div className="absolute inset-0 bg-slate-800/60 blur-xl" />}
               {editUrl ? (
@@ -395,7 +395,7 @@ function Studio() {
         </div>
 
         <div className="lg:col-span-6 space-y-6">
-          <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
+          <section className="glass-panel rounded-2xl p-5 border border-slate-800 space-y-3">
             <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Transcript & captions</h2>
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-sm leading-relaxed max-h-72 overflow-y-auto">
               {words.map((w) => {
@@ -429,7 +429,7 @@ function Studio() {
                     return (
                       <button key={l.id} type="button" onClick={() => update((s) => ({ ...s, style: l.id }))}
                         className={`rounded-xl border p-2 text-left ${state.style === l.id ? 'border-indigo-400 bg-indigo-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'}`}>
-                        <div className="h-10 rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 grid place-items-center">
+                        <div className="h-10 rounded-lg bg-slate-800 grid place-items-center">
                           <span className={`px-1 text-[12px] leading-none ${l.box ? 'bg-black/70 py-0.5' : ''}`} style={{ fontFamily: l.font, fontWeight: l.weight, textShadow: l.box ? undefined : '0 0 2px #000, 0 1px 2px #000' }}>
                             {sample.slice(0, Math.min(3, l.words)).map((w, i) => (
                               <span key={i} style={{ color: i === 1 && l.id !== 'classic' ? l.active : i === 2 && l.keyword ? l.keyword : '#fff' }}>{w} </span>
@@ -514,7 +514,7 @@ function Studio() {
             </div>
           </section>
 
-          <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
+          <section className="glass-panel rounded-2xl p-5 border border-slate-800 space-y-3">
             <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Layout</h2>
             <div className="flex flex-wrap gap-2">
               {Object.keys(ASPECTS).map((a) => (
@@ -554,14 +554,14 @@ function Studio() {
             <p className="text-[11px] text-slate-500">{state.mode === 'two' ? 'Two speakers stacked — one face per half, captions in the middle.' : reframeNote ?? (state.keyframes.length > 1 ? `Following the speaker (${state.keyframes.length} keyframes).` : state.mode === 'fit' ? 'Whole frame, letterboxed.' : 'Static crop.')}</p>
           </section>
 
-          <section className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-3">
+          <section className="glass-panel rounded-2xl p-5 border border-slate-800 space-y-3">
             <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Export</h2>
             <div className="flex flex-wrap items-center gap-3">
               <select value={preset} onChange={(e) => setPreset(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200" aria-label="Export preset">
                 {aspect.presets.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
               <button onClick={exportClip} disabled={exporting || dur < 8000 || dur > 180000}
-                className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold disabled:opacity-50">
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold disabled:opacity-50">
                 {exporting ? 'Starting…' : 'Export MP4'}
               </button>
             </div>

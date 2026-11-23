@@ -68,7 +68,7 @@ export default function TeamPage() {
               <option value="editor">Editor (can edit + export)</option>
               <option value="viewer">Viewer (can watch)</option>
             </select>
-            <button className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs">Send invite</button>
+            <button className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs">Send invite</button>
           </form>
         )}
         {msg && <p className="text-xs text-emerald-300">{msg}</p>}

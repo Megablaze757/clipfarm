@@ -86,7 +86,7 @@ export function ExportAll({ candidates, projectTitle }: { candidates: CandidateR
         <select value={preset} onChange={(e) => setPreset(e.target.value)} disabled={busy} className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-slate-200">
           {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
-        <button onClick={run} disabled={busy || !candidates.length} className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold disabled:opacity-60">
+        <button onClick={run} disabled={busy || !candidates.length} className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold disabled:opacity-60">
           {busy ? `Exporting… ${done}/${rows?.length ?? 0}` : 'Export & download zip'}
         </button>
         <span className="text-slate-500">Each clip keeps its own captions, headline and layout settings.</span>

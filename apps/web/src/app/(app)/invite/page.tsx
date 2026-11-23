@@ -32,7 +32,7 @@ function Accept() {
           <>
             <p className="text-sm text-slate-300">You'll work on the team's projects and clips. Projects in your current personal workspace stay there.</p>
             {state === 'error' && <p className="text-sm text-rose-300">{msg}</p>}
-            <button onClick={join} disabled={state === 'joining' || !token} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-sm disabled:opacity-60">
+            <button onClick={join} disabled={state === 'joining' || !token} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm disabled:opacity-60">
               {state === 'joining' ? 'Joining…' : 'Accept invite'}
             </button>
             <Link href="/projects" className="block text-xs text-slate-400 underline">Not now</Link>

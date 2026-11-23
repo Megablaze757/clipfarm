@@ -107,13 +107,13 @@ export default function BrandPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={save} disabled={busy} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-sm disabled:opacity-60">{busy ? 'Saving…' : 'Save brand kit'}</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm disabled:opacity-60">{busy ? 'Saving…' : 'Save brand kit'}</button>
             {saved && <span className="text-xs text-emerald-300">Saved — new exports use it.</span>}
           </div>
         </section>
 
         <section className="flex justify-center">
-          <div className="relative w-[230px] h-[410px] rounded-2xl overflow-hidden border-2 border-slate-800 bg-gradient-to-br from-slate-600 via-slate-800 to-slate-900">
+          <div className="relative w-[230px] h-[410px] rounded-2xl overflow-hidden border-2 border-slate-800 bg-slate-800">
             <div className="absolute inset-x-3 top-[10%] flex flex-col items-center gap-[3px]">
               {['YOUR HEADLINE', 'GOES HERE'].map((l) => (
                 <span key={l} className="text-[11px] px-1.5 py-0.5 leading-tight" style={{ background: brand.colors?.headline_bg || '#fff', color: brand.colors?.headline_text || '#000', fontFamily: 'Montserrat, sans-serif', fontWeight: 800 }}>{l}</span>

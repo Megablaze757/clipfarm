@@ -158,7 +158,7 @@ function Payments() {
             </p>
           </div>
           {s.key_present && (
-            <button onClick={setup} disabled={busy} className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs disabled:opacity-60">
+            <button onClick={setup} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-60">
               {busy ? 'Setting up…' : s.set_up ? 'Re-check setup' : 'Set up payments'}
             </button>
           )}

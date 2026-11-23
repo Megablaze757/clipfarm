@@ -52,7 +52,7 @@ function Connections() {
               <button onClick={() => disconnect(c.platform)} disabled={busy === c.platform} className="px-3 py-2 rounded-lg text-xs border border-slate-700 text-slate-300 hover:bg-slate-800">Disconnect</button>
             ) : (
               <button onClick={() => connect(c.platform)} disabled={!c.available || busy === c.platform || isGuest(session)}
-                className="px-4 py-2 rounded-lg text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 text-white disabled:opacity-40">
+                className="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40">
                 {busy === c.platform ? 'Opening…' : 'Connect'}
               </button>
             )}

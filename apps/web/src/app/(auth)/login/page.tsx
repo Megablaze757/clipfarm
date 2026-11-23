@@ -158,7 +158,7 @@ function LoginForm() {
                 {cooldown > 0 ? `Resend the email in ${cooldown}s` : "Didn't get the email? Send it again"}
               </button>
             )}
-            <button disabled={busy} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-sm disabled:opacity-60">
+            <button disabled={busy} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm disabled:opacity-60">
               {busy ? 'Working…' : mode === 'sign_in' ? 'Sign in' : mode === 'sign_up' ? 'Create account' : 'Send reset link'}
             </button>
           </form>

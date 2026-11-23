@@ -60,7 +60,7 @@ function Billing() {
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Source minutes this month</span>
             <div className="text-3xl font-black text-white">{usage.minutes_used} <span className="text-base text-slate-400 font-normal">/ {usage.minutes_included}</span></div>
             <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-              <div className={`h-full ${pct > 90 ? 'bg-rose-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'}`} style={{ width: `${pct}%` }} />
+              <div className={`h-full ${pct > 90 ? 'bg-rose-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} />
             </div>
             <p className="text-[11px] text-slate-500">{usage.projects} projects · {usage.renders} exports</p>
           </div>
