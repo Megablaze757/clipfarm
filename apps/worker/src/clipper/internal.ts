@@ -121,6 +121,7 @@ export async function internalComplete(req: Request, env: Env): Promise<Response
       // Paid rungs first: Clipper scoring is batch work and must not wait on
       // rate-limited free tiers.
       priority: true,
+      patient: true,
       validate: b.json === false ? undefined : (t) => {
         try { JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1)); return true; } catch { return false; }
       },

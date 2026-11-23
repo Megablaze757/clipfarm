@@ -651,6 +651,14 @@ const PROVIDER_DEADLINE_MS: Record<Provider, number> = {
 };
 
 /**
+ * Clipper's batch work (`patient`): nobody is waiting on a spinner, and a
+ * judge pass writes ~3,000 tokens — which the interactive limits above abort
+ * every time, silently turning each project into rule-based scoring.
+ */
+const PATIENT_ATTEMPT_MS: Record<Provider, number> = { groq: 30_000, openrouter: 110_000, nvidia: 110_000 };
+const PATIENT_DEADLINE_MS: Record<Provider, number> = { groq: 35_000, openrouter: 150_000, nvidia: 270_000 };
+
+/**
  * Only race the OpenRouter `:free` rungs if we get here early.
  *
  * Those rungs exist to save money for non-paying users, and Groq now does that
@@ -953,12 +961,12 @@ interface Attempt {
  */
 async function providerOnce(
   env: Env, rung: Rung, system: string, user: string, maxTokens: number, json_mode = false,
-  image?: string | null
+  image?: string | null, patient = false
 ): Promise<Attempt> {
   const isOpenRouter = rung.provider === "openrouter";
   const model = rung.model;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ATTEMPT_TIMEOUT_MS[rung.provider]);
+  const timer = setTimeout(() => ctrl.abort(), (patient ? PATIENT_ATTEMPT_MS : ATTEMPT_TIMEOUT_MS)[rung.provider]);
   try {
     const send = (withJsonMode: boolean) => fetch(
       PROVIDER_API[rung.provider],
@@ -1071,6 +1079,8 @@ async function complete(
     image?: string | null;
     /** Admin batch work: NVIDIA only — see BACK_OFFICE_AI above the ladder. */
     backOffice?: boolean;
+    /** Batch work with no one waiting (Clipper's runner): much longer limits. */
+    patient?: boolean;
   }
 ): Promise<{ text: string; model: string; cost: number }> {
   const started = Date.now();
@@ -1081,7 +1091,7 @@ async function complete(
   let spent = 0;
 
   const attempt = async (rung: Rung) => {
-    const { text, cost, finish } = await providerOnce(env, rung, opts.system, opts.user, opts.maxTokens, opts.json, opts.image);
+    const { text, cost, finish } = await providerOnce(env, rung, opts.system, opts.user, opts.maxTokens, opts.json, opts.image, opts.patient);
     spent += cost;
     if (opts.validate && !opts.validate(text)) {
       /**
@@ -1174,7 +1184,7 @@ async function complete(
   const runQueued = async (rungs: Rung[]) => {
     for (const rung of rungs) {
       const label = `${rung.provider}/${rung.model}`;
-      if (Date.now() - started > PROVIDER_DEADLINE_MS[rung.provider]) {
+      if (Date.now() - started > (opts.patient ? PATIENT_DEADLINE_MS : PROVIDER_DEADLINE_MS)[rung.provider]) {
         trail.push(`${label}: skipped (${rung.provider} budget spent)`);
         continue;
       }

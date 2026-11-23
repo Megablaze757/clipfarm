@@ -109,7 +109,7 @@ export async function llm(system: string, user: string, maxTokens = 1500): Promi
       method: "POST",
       headers: { ...(await AUTH()), "Content-Type": "application/json" },
       body: JSON.stringify({ system, user, max_tokens: maxTokens, json: true }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(420_000), // the Worker runs "patient" for batch work (up to ~6 min)
     });
     if (!r.ok) {
       console.warn(`AI ladder unavailable (${r.status}): ${(await r.text()).slice(0, 300)}`);

@@ -66,6 +66,7 @@ export async function translateCaptions(env: Env, clipId: string, words: Word[],
     maxTokens: Math.min(4000, 300 + ls.length * 45),
     json: true,
     priority: true,
+    patient: true,
     validate: (t) => parse(t) !== null,
   });
   const j = parse(out.text)!;
